@@ -4,7 +4,9 @@ const cors = require('cors');
 const cron = require('node-cron');
 const connectDB = require('./config/db');
 const chainRoutes = require('./routes/chainRoutes');
-const fetchAndUpdateChains = require('./utils/fetchGlacierData');
+const fetchAndUpdateData = require('./utils/fetchGlacierData');
+const tvlRoutes = require('./routes/tvlRoutes');
+require('./models/tvl');
 
 const app = express();
 
@@ -33,6 +35,7 @@ connectDB();
 
 // Routes
 app.use('/api', chainRoutes);
+app.use('/api', tvlRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -40,7 +43,7 @@ app.get('/health', (req, res) => {
 });
 
 // Schedule data updates
-cron.schedule('*/30 * * * *', fetchAndUpdateChains);
+cron.schedule('*/30 * * * *', fetchAndUpdateData);
 
 // Development-only middleware
 if (isDevelopment) {
@@ -100,4 +103,12 @@ if (process.env.NODE_ENV !== 'production') {
     server.on('error', (error) => {
         console.error('Production server error:', error);
     });
+}
+
+// Start the automatic updates when the server starts
+if (process.env.NODE_ENV === 'development') {
+  console.log('Starting automatic data updates...');
+  fetchAndUpdateData().catch(error => {
+    console.error('Initial data fetch failed:', error);
+  });
 }
