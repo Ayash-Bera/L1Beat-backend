@@ -2,10 +2,22 @@ const chainService = require('../services/chainService');
 
 exports.getAllChains = async (req, res) => {
     try {
+        console.log('Fetching all chains...');
         const chains = await chainService.getAllChains();
-        res.json(chains);
+        
+        console.log('Chains fetched:', {
+            count: chains?.length || 0,
+            firstChain: chains?.[0] ? chains[0].chainId : null
+        });
+        
+        res.json(chains || []);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error('Error in getAllChains:', error);
+        res.status(500).json({ 
+            error: 'Failed to fetch chains',
+            message: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
     }
 };
 
