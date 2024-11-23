@@ -22,7 +22,9 @@ const isDevelopment = process.env.NODE_ENV === 'development';
 
 // CORS configuration with environment-specific settings
 app.use(cors({
-  origin: isDevelopment ? '*' : 'https://l1beat.io',
+  origin: isDevelopment 
+    ? '*' 
+    : ['https://l1beat.io', 'https://www.l1beat.io', 'http://localhost:4173'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
@@ -42,8 +44,19 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
-// Schedule data updates
-cron.schedule('*/30 * * * *', fetchAndUpdateData);
+// Schedule data updates - ensure it runs in production too
+if (process.env.NODE_ENV === 'production') {
+  console.log('Starting production scheduled tasks...');
+  // Immediate initial fetch
+  fetchAndUpdateData().catch(error => {
+    console.error('Initial production data fetch failed:', error);
+  });
+  // Schedule subsequent updates
+  cron.schedule('*/30 * * * *', () => {
+    console.log('Running scheduled TVL update in production...');
+    fetchAndUpdateData();
+  });
+}
 
 // Development-only middleware
 if (isDevelopment) {

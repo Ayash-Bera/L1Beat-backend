@@ -4,15 +4,19 @@ const axios = require('axios');
 class TvlService {
   async updateTvlData() {
     try {
-      console.log('Fetching TVL data from DefiLlama...');
+      console.log(`[${process.env.NODE_ENV}] Fetching TVL data from DefiLlama...`);
       const response = await axios.get('https://api.llama.fi/v2/historicalChainTvl/Avalanche');
       const tvlData = response.data;
       
-      console.log(`Received ${tvlData.length} TVL records from API`);
+      console.log(`[${process.env.NODE_ENV}] Received ${tvlData.length} TVL records from API`);
 
       if (!Array.isArray(tvlData) || tvlData.length === 0) {
         throw new Error('Invalid or empty TVL data received');
       }
+
+      // Add timestamp logging
+      const latestDate = Math.max(...tvlData.map(item => item.date));
+      console.log(`[${process.env.NODE_ENV}] Latest TVL date in data:`, new Date(latestDate * 1000).toISOString());
 
       // Bulk upsert operation
       const operations = tvlData.map(item => ({
@@ -24,14 +28,19 @@ class TvlService {
       }));
 
       const result = await TVL.bulkWrite(operations);
-      console.log('TVL update result:', {
+      console.log(`[${process.env.NODE_ENV}] TVL update result:`, {
         modified: result.modifiedCount,
-        upserted: result.upsertedCount
+        upserted: result.upsertedCount,
+        timestamp: new Date().toISOString()
       });
       
       return true;
     } catch (error) {
-      console.error('Error updating TVL data:', error);
+      console.error(`[${process.env.NODE_ENV}] Error updating TVL data:`, {
+        message: error.message,
+        stack: error.stack,
+        timestamp: new Date().toISOString()
+      });
       throw error;
     }
   }
