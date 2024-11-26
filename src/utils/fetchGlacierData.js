@@ -1,27 +1,40 @@
-const axios = require('axios');
 const chainService = require('../services/chainService');
 const tvlService = require('../services/tvlService');
+const chainDataService = require('../services/chainDataService');
+const Chain = require('../models/chain');
 
 const fetchAndUpdateData = async () => {
-  try {
-    console.log(`[${process.env.NODE_ENV}] Starting scheduled data update...`);
-    
-    // Update chains
-    const response = await axios.get('https://glacier-api.avax.network/v1/chains');
-    const chains = response.data.chains;
+    try {
+        console.log(`[${process.env.NODE_ENV}] Starting scheduled data update...`);
+        
+        // Fetch chain data from Glacier API
+        const chains = await chainDataService.fetchChainData();
+        console.log(`Fetched ${chains.length} chains from Glacier API`);
 
-    for (const chain of chains) {
-      await chainService.updateChain(chain);
+        // Clear existing data
+        await Chain.deleteMany({});
+        
+        const processedInThisCycle = new Set();
+        
+        for (const chain of chains) {
+            if (processedInThisCycle.has(chain.chainId)) {
+                console.log(`Skipping duplicate chain ${chain.chainId} in current cycle`);
+                continue;
+            }
+            
+            await chainService.updateChain(chain);
+            processedInThisCycle.add(chain.chainId);
+        }
+
+        await tvlService.updateTvlData();
+        
+        console.log(`[${process.env.NODE_ENV}] Chains and TVL data updated successfully`);
+        console.log(`Processed ${processedInThisCycle.size} unique chains`);
+        
+    } catch (error) {
+        console.error(`[${process.env.NODE_ENV}] Error in scheduled data update:`, error);
+        throw error;
     }
-    
-    // Update TVL data
-    await tvlService.updateTvlData();
-    
-    console.log(`[${process.env.NODE_ENV}] Chains and TVL data updated successfully`);
-  } catch (error) {
-    console.error(`[${process.env.NODE_ENV}] Error in scheduled data update:`, error);
-  }
 };
 
-// Remove the setInterval - we're using cron instead
 module.exports = fetchAndUpdateData;

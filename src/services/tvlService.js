@@ -5,7 +5,16 @@ class TvlService {
   async updateTvlData() {
     try {
       console.log(`[${process.env.NODE_ENV}] Fetching TVL data from DefiLlama...`);
-      const response = await axios.get('https://api.llama.fi/v2/historicalChainTvl/Avalanche');
+      const response = await axios.get('https://api.llama.fi/v2/historicalChainTvl/Avalanche', {
+        timeout: 10000
+      });
+      
+      console.log('Raw DefiLlama response:', {
+        status: response.status,
+        dataLength: response.data?.length,
+        sampleData: response.data?.[0]
+      });
+
       const tvlData = response.data;
       
       console.log(`[${process.env.NODE_ENV}] Received ${tvlData.length} TVL records from API`);
@@ -38,6 +47,8 @@ class TvlService {
     } catch (error) {
       console.error(`[${process.env.NODE_ENV}] Error updating TVL data:`, {
         message: error.message,
+        status: error.response?.status,
+        data: error.response?.data,
         stack: error.stack,
         timestamp: new Date().toISOString()
       });

@@ -32,8 +32,37 @@ app.use(cors({
 
 app.use(express.json());
 
-// Connect to MongoDB
-connectDB();
+// Single initialization point for data updates
+const initializeDataUpdates = async () => {
+  console.log(`Initializing data updates for ${process.env.NODE_ENV} environment`);
+  
+  // Initial fetch for all environments
+  try {
+    await fetchAndUpdateData();
+    console.log('Initial data fetch completed successfully');
+  } catch (error) {
+    console.error('Initial data fetch failed:', error);
+  }
+
+  // Set up scheduled updates only in production
+  if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
+    console.log('Setting up production scheduled tasks...');
+    cron.schedule('*/30 * * * *', async () => {
+      console.log('Running scheduled update...');
+      try {
+        await fetchAndUpdateData();
+        console.log('Scheduled update completed successfully');
+      } catch (error) {
+        console.error('Scheduled update failed:', error);
+      }
+    });
+  }
+};
+
+// Call initialization after DB connection
+connectDB().then(() => {
+  initializeDataUpdates();
+});
 
 // Routes
 app.use('/api', chainRoutes);
@@ -43,20 +72,6 @@ app.use('/api', tvlRoutes);
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
-
-// Schedule data updates - ensure it runs in production too
-if (process.env.NODE_ENV === 'production') {
-  console.log('Starting production scheduled tasks...');
-  // Immediate initial fetch
-  fetchAndUpdateData().catch(error => {
-    console.error('Initial production data fetch failed:', error);
-  });
-  // Schedule subsequent updates
-  cron.schedule('*/30 * * * *', () => {
-    console.log('Running scheduled TVL update in production...');
-    fetchAndUpdateData();
-  });
-}
 
 // Development-only middleware
 if (isDevelopment) {
@@ -116,12 +131,4 @@ if (process.env.NODE_ENV !== 'production') {
     server.on('error', (error) => {
         console.error('Production server error:', error);
     });
-}
-
-// Start the automatic updates when the server starts
-if (process.env.NODE_ENV === 'development') {
-  console.log('Starting automatic data updates...');
-  fetchAndUpdateData().catch(error => {
-    console.error('Initial data fetch failed:', error);
-  });
 }
