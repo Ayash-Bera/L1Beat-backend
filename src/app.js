@@ -34,7 +34,7 @@ app.use(express.json());
 
 // Single initialization point for data updates
 const initializeDataUpdates = async () => {
-  console.log(`Initializing data updates for ${process.env.NODE_ENV} environment`);
+  console.log(`Initializing data updates for ${process.env.NODE_ENV} environment at ${new Date().toISOString()}`);
   
   // Initial fetch for all environments
   try {
@@ -45,13 +45,31 @@ const initializeDataUpdates = async () => {
   }
 
   // Set up scheduled updates only in production
-  if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
+  if (process.env.NODE_ENV === 'production') {
     console.log('Setting up production scheduled tasks...');
+    
+    // Add immediate update check
+    const lastTVL = await TVL.findOne().sort({ date: -1 });
+    console.log('Last TVL record:', {
+      date: lastTVL?.date ? new Date(lastTVL.date * 1000).toISOString() : 'none',
+      tvl: lastTVL?.tvl,
+      lastUpdated: lastTVL?.lastUpdated
+    });
+
+    // Setup cron with better logging
     cron.schedule('*/30 * * * *', async () => {
-      console.log('Running scheduled update...');
+      console.log(`Running scheduled TVL update at ${new Date().toISOString()}`);
       try {
         await fetchAndUpdateData();
         console.log('Scheduled update completed successfully');
+        
+        // Verify update
+        const latestTVL = await TVL.findOne().sort({ date: -1 });
+        console.log('Latest TVL after update:', {
+          date: latestTVL?.date ? new Date(latestTVL.date * 1000).toISOString() : 'none',
+          tvl: latestTVL?.tvl,
+          lastUpdated: latestTVL?.lastUpdated
+        });
       } catch (error) {
         console.error('Scheduled update failed:', error);
       }

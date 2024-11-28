@@ -11,34 +11,32 @@ const fetchAndUpdateData = async () => {
         const chains = await chainDataService.fetchChainData();
         console.log(`Fetched ${chains.length} chains from Glacier API`);
 
-        // Only proceed with deletion if we successfully fetched new data
+        // Only proceed if we successfully fetched new data
         if (chains && chains.length > 0) {
-            // Create a session to handle the transaction
-            const session = await Chain.startSession();
-            
             try {
-                await session.withTransaction(async () => {
-                    // Delete existing data
-                    await Chain.deleteMany({}, { session });
-                    
-                    const processedInThisCycle = new Set();
-                    
-                    // Update chains within the same transaction
-                    for (const chain of chains) {
-                        if (processedInThisCycle.has(chain.chainId)) {
-                            console.log(`Skipping duplicate chain ${chain.chainId} in current cycle`);
-                            continue;
-                        }
-                        
-                        await chainService.updateChain(chain);
-                        processedInThisCycle.add(chain.chainId);
+                // Check if we're using a replica set (production) or standalone (development)
+                const isReplicaSet = process.env.NODE_ENV === 'production';
+                
+                if (isReplicaSet) {
+                    // Production: Use transactions
+                    const session = await Chain.startSession();
+                    try {
+                        await session.withTransaction(async () => {
+                            await updateChains(chains, session);
+                        });
+                    } finally {
+                        await session.endSession();
                     }
-                });
-            } finally {
-                await session.endSession();
+                } else {
+                    // Development: Direct updates without transaction
+                    await updateChains(chains);
+                }
+                
+                console.log(`Processed ${chains.length} unique chains successfully`);
+            } catch (error) {
+                console.error('Error updating chains:', error);
+                throw error;
             }
-            
-            console.log(`Processed ${chains.length} unique chains successfully`);
         } else {
             console.warn('No chains fetched from API, skipping database update');
         }
@@ -57,5 +55,26 @@ const fetchAndUpdateData = async () => {
         throw error;
     }
 };
+
+// Helper function to update chains
+async function updateChains(chains, session = null) {
+    const options = session ? { session } : {};
+    
+    // Delete existing data
+    await Chain.deleteMany({}, options);
+    
+    const processedInThisCycle = new Set();
+    
+    // Update chains
+    for (const chain of chains) {
+        if (processedInThisCycle.has(chain.chainId)) {
+            console.log(`Skipping duplicate chain ${chain.chainId} in current cycle`);
+            continue;
+        }
+        
+        await chainService.updateChain(chain);
+        processedInThisCycle.add(chain.chainId);
+    }
+}
 
 module.exports = fetchAndUpdateData;

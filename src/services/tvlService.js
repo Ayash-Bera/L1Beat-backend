@@ -4,50 +4,68 @@ const axios = require('axios');
 class TvlService {
   async updateTvlData() {
     try {
-      console.log(`[${process.env.NODE_ENV}] Fetching TVL data from DefiLlama...`);
+      console.log(`[${process.env.NODE_ENV}] Starting TVL update at ${new Date().toISOString()}`);
+      
+      // Add request logging
+      console.log('Making request to DefiLlama API...');
       const response = await axios.get('https://api.llama.fi/v2/historicalChainTvl/Avalanche', {
-        timeout: 10000
+        timeout: 10000,
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'l1beat-backend'
+        }
       });
       
-      console.log('Raw DefiLlama response:', {
+      // Add detailed response logging
+      console.log('DefiLlama API Response:', {
         status: response.status,
+        statusText: response.statusText,
         dataLength: response.data?.length,
-        sampleData: response.data?.[0]
+        firstRecord: response.data?.[0],
+        lastRecord: response.data?.[response.data.length - 1],
+        timestamp: new Date().toISOString()
       });
 
       const tvlData = response.data;
       
-      console.log(`[${process.env.NODE_ENV}] Received ${tvlData.length} TVL records from API`);
-
+      // Validate data more strictly
       if (!Array.isArray(tvlData) || tvlData.length === 0) {
-        throw new Error('Invalid or empty TVL data received');
+        throw new Error(`Invalid TVL data received: ${JSON.stringify(tvlData)}`);
       }
 
-      // Add timestamp logging
-      const latestDate = Math.max(...tvlData.map(item => item.date));
-      console.log(`[${process.env.NODE_ENV}] Latest TVL date in data:`, new Date(latestDate * 1000).toISOString());
-
-      // Bulk upsert operation
+      // Log database operation
+      console.log(`Attempting to update ${tvlData.length} TVL records in database...`);
+      
       const operations = tvlData.map(item => ({
         updateOne: {
           filter: { date: item.date },
-          update: { $set: { tvl: item.tvl, lastUpdated: new Date() } },
+          update: { 
+            $set: { 
+              tvl: item.tvl, 
+              lastUpdated: new Date() 
+            }
+          },
           upsert: true
         }
       }));
 
       const result = await TVL.bulkWrite(operations);
-      console.log(`[${process.env.NODE_ENV}] TVL update result:`, {
+      
+      // Enhanced result logging
+      console.log('TVL Update Results:', {
+        environment: process.env.NODE_ENV,
         modified: result.modifiedCount,
         upserted: result.upsertedCount,
+        matched: result.matchedCount,
         timestamp: new Date().toISOString()
       });
-      
+
       return true;
     } catch (error) {
-      console.error(`[${process.env.NODE_ENV}] Error updating TVL data:`, {
+      console.error(`[${process.env.NODE_ENV}] TVL Update Error:`, {
         message: error.message,
         status: error.response?.status,
+        statusText: error.response?.statusText,
         data: error.response?.data,
         stack: error.stack,
         timestamp: new Date().toISOString()
