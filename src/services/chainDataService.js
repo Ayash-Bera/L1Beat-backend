@@ -7,23 +7,36 @@ class ChainDataService {
 
     async fetchChainData() {
         try {
-            // Fetch chains
-            const response = await axios.get(`${this.GLACIER_API_BASE}/chains`);
+            console.log('Fetching chains from Glacier API...');
+            const response = await axios.get(`${this.GLACIER_API_BASE}/chains`, {
+                timeout: 10000,
+                headers: {
+                    'Accept': 'application/json',
+                    'User-Agent': 'l1beat-backend'
+                }
+            });
             
+            console.log('Glacier API Response:', {
+                status: response.status,
+                chainCount: response.data?.chains?.length || 0
+            });
+
             if (!response.data || !response.data.chains) {
-                console.error('Invalid response from Glacier API:', response.data);
-                return [];
+                throw new Error('Invalid response from Glacier API');
             }
             
             const chains = response.data.chains.filter(chain => !chain.isTestnet);
-            console.log(`Successfully fetched ${chains.length} chains from Glacier API`);
+            console.log(`Filtered ${chains.length} non-testnet chains`);
             
             return chains;
             
         } catch (error) {
-            console.error('Error fetching chain data:', error.message);
-            console.error('Full error:', error);
-            return [];
+            console.error('Error fetching chain data:', {
+                message: error.message,
+                status: error.response?.status,
+                data: error.response?.data
+            });
+            throw error;
         }
     }
 }

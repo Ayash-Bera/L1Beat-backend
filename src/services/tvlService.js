@@ -2,75 +2,64 @@ const TVL = require('../models/tvl');
 const axios = require('axios');
 
 class TvlService {
-  async updateTvlData() {
-    try {
-      console.log(`[${process.env.NODE_ENV}] Starting TVL update at ${new Date().toISOString()}`);
-      
-      // Add request logging
-      console.log('Making request to DefiLlama API...');
-      const response = await axios.get('https://api.llama.fi/v2/historicalChainTvl/Avalanche', {
-        timeout: 10000,
-        headers: {
-          'Accept': 'application/json',
-          'User-Agent': 'l1beat-backend'
+  async updateTvlData(retryCount = 3) {
+    for (let attempt = 1; attempt <= retryCount; attempt++) {
+      try {
+        console.log(`[TVL Update] Attempt ${attempt}/${retryCount} at ${new Date().toISOString()}`);
+        
+        const response = await axios.get('https://api.llama.fi/v2/historicalChainTvl/Avalanche', {
+          timeout: 15000, // Increased timeout
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'l1beat-backend'
+          }
+        });
+
+        if (!response.data || !Array.isArray(response.data)) {
+          throw new Error('Invalid response format from DefiLlama');
         }
-      });
-      
-      // Add detailed response logging
-      console.log('DefiLlama API Response:', {
-        status: response.status,
-        statusText: response.statusText,
-        dataLength: response.data?.length,
-        firstRecord: response.data?.[0],
-        lastRecord: response.data?.[response.data.length - 1],
-        timestamp: new Date().toISOString()
-      });
 
-      const tvlData = response.data;
-      
-      // Validate data more strictly
-      if (!Array.isArray(tvlData) || tvlData.length === 0) {
-        throw new Error(`Invalid TVL data received: ${JSON.stringify(tvlData)}`);
-      }
+        const tvlData = response.data;
+        console.log(`Received ${tvlData.length} TVL records, latest date: ${new Date(tvlData[tvlData.length-1].date * 1000).toISOString()}`);
 
-      // Log database operation
-      console.log(`Attempting to update ${tvlData.length} TVL records in database...`);
-      
-      const operations = tvlData.map(item => ({
-        updateOne: {
-          filter: { date: item.date },
-          update: { 
-            $set: { 
-              tvl: item.tvl, 
-              lastUpdated: new Date() 
+        const result = await TVL.bulkWrite(
+          tvlData.map(item => ({
+            updateOne: {
+              filter: { date: item.date },
+              update: { 
+                $set: { 
+                  tvl: item.tvl, 
+                  lastUpdated: new Date() 
+                }
+              },
+              upsert: true
             }
-          },
-          upsert: true
+          }))
+        );
+
+        console.log('TVL Update Success:', {
+          modified: result.modifiedCount,
+          upserted: result.upsertedCount,
+          timestamp: new Date().toISOString()
+        });
+
+        return true;
+
+      } catch (error) {
+        console.error(`TVL Update Error (Attempt ${attempt}/${retryCount}):`, {
+          message: error.message,
+          status: error.response?.status,
+          data: error.response?.data,
+          timestamp: new Date().toISOString()
+        });
+
+        if (attempt === retryCount) {
+          throw error;
         }
-      }));
-
-      const result = await TVL.bulkWrite(operations);
-      
-      // Enhanced result logging
-      console.log('TVL Update Results:', {
-        environment: process.env.NODE_ENV,
-        modified: result.modifiedCount,
-        upserted: result.upsertedCount,
-        matched: result.matchedCount,
-        timestamp: new Date().toISOString()
-      });
-
-      return true;
-    } catch (error) {
-      console.error(`[${process.env.NODE_ENV}] TVL Update Error:`, {
-        message: error.message,
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        data: error.response?.data,
-        stack: error.stack,
-        timestamp: new Date().toISOString()
-      });
-      throw error;
+        
+        // Wait before retry (exponential backoff)
+        await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+      }
     }
   }
 

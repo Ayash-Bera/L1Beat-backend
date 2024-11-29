@@ -6,7 +6,11 @@ const connectDB = require('./config/db');
 const chainRoutes = require('./routes/chainRoutes');
 const fetchAndUpdateData = require('./utils/fetchGlacierData');
 const tvlRoutes = require('./routes/tvlRoutes');
-require('./models/tvl');
+const TVL = require('./models/tvl');
+const tvlService = require('./services/tvlService');
+const chainDataService = require('./services/chainDataService');
+const Chain = require('./models/chain');
+const chainService = require('./services/chainService');
 
 const app = express();
 
@@ -34,44 +38,72 @@ app.use(express.json());
 
 // Single initialization point for data updates
 const initializeDataUpdates = async () => {
-  console.log(`Initializing data updates for ${process.env.NODE_ENV} environment at ${new Date().toISOString()}`);
+  console.log(`[${process.env.NODE_ENV}] Initializing data updates at ${new Date().toISOString()}`);
   
-  // Initial fetch for all environments
   try {
-    await fetchAndUpdateData();
-    console.log('Initial data fetch completed successfully');
-  } catch (error) {
-    console.error('Initial data fetch failed:', error);
-  }
+    // First update chains
+    console.log('Fetching initial chain data...');
+    const chains = await chainDataService.fetchChainData();
+    console.log(`Fetched ${chains.length} chains from Glacier API`);
 
-  // Set up scheduled updates only in production
-  if (process.env.NODE_ENV === 'production') {
-    console.log('Setting up production scheduled tasks...');
+    if (chains && chains.length > 0) {
+      for (const chain of chains) {
+        await chainService.updateChain(chain);
+      }
+      console.log(`Updated ${chains.length} chains in database`);
+      
+      // Verify chains were saved
+      const savedChains = await Chain.find();
+      console.log('Chains in database:', {
+        count: savedChains.length,
+        chainIds: savedChains.map(c => c.chainId)
+      });
+    } else {
+      console.error('No chains fetched from Glacier API');
+    }
+
+    // Then update TVL
+    console.log('Updating TVL data...');
+    await tvlService.updateTvlData();
     
-    // Add immediate update check
+    // Verify TVL update
     const lastTVL = await TVL.findOne().sort({ date: -1 });
-    console.log('Last TVL record:', {
-      date: lastTVL?.date ? new Date(lastTVL.date * 1000).toISOString() : 'none',
+    console.log('TVL Update Result:', {
+      lastUpdate: lastTVL?.date ? new Date(lastTVL.date * 1000).toISOString() : 'none',
       tvl: lastTVL?.tvl,
-      lastUpdated: lastTVL?.lastUpdated
+      timestamp: new Date().toISOString()
     });
 
-    // Setup cron with better logging
+  } catch (error) {
+    console.error('Initialization error:', error);
+  }
+
+  // Set up scheduled updates
+  if (process.env.NODE_ENV === 'production') {
+    console.log('Setting up update schedules...');
+    
+    // TVL updates every 30 minutes
     cron.schedule('*/30 * * * *', async () => {
-      console.log(`Running scheduled TVL update at ${new Date().toISOString()}`);
       try {
-        await fetchAndUpdateData();
-        console.log('Scheduled update completed successfully');
-        
-        // Verify update
-        const latestTVL = await TVL.findOne().sort({ date: -1 });
-        console.log('Latest TVL after update:', {
-          date: latestTVL?.date ? new Date(latestTVL.date * 1000).toISOString() : 'none',
-          tvl: latestTVL?.tvl,
-          lastUpdated: latestTVL?.lastUpdated
-        });
+        console.log(`[CRON] Starting scheduled TVL update at ${new Date().toISOString()}`);
+        await tvlService.updateTvlData();
+        console.log('[CRON] TVL update completed');
       } catch (error) {
-        console.error('Scheduled update failed:', error);
+        console.error('[CRON] TVL update failed:', error);
+      }
+    });
+
+    // Chain updates every hour
+    cron.schedule('0 * * * *', async () => {
+      try {
+        console.log(`[CRON] Starting scheduled chain update at ${new Date().toISOString()}`);
+        const chains = await chainDataService.fetchChainData();
+        for (const chain of chains) {
+          await chainService.updateChain(chain);
+        }
+        console.log(`[CRON] Updated ${chains.length} chains`);
+      } catch (error) {
+        console.error('[CRON] Chain update failed:', error);
       }
     });
   }
