@@ -11,6 +11,7 @@ const tvlService = require('./services/tvlService');
 const chainDataService = require('./services/chainDataService');
 const Chain = require('./models/chain');
 const chainService = require('./services/chainService');
+const tpsRoutes = require('./routes/tpsRoutes');
 
 const app = express();
 
@@ -117,6 +118,7 @@ connectDB().then(() => {
 // Routes
 app.use('/api', chainRoutes);
 app.use('/api', tvlRoutes);
+app.use('/api', tpsRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

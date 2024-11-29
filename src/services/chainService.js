@@ -1,6 +1,7 @@
 const Chain = require('../models/chain');
 const axios = require('axios');
 const GLACIER_API_BASE = 'https://glacier-api.avax.network/v1';
+const tpsService = require('../services/tpsService');
 
 class ChainService {
     constructor() {
@@ -11,7 +12,26 @@ class ChainService {
     // Get all chains
     async getAllChains() {
         try {
-            return await Chain.find();
+            const chains = await Chain.find();
+            
+            // Fetch latest TPS for each chain
+            const chainsWithTps = await Promise.all(chains.map(async (chain) => {
+                try {
+                    const tpsData = await tpsService.getLatestTps(chain.chainId);
+                    return {
+                        ...chain.toObject(),
+                        tps: tpsData ? {
+                            value: parseFloat(tpsData.value).toFixed(2),
+                            timestamp: tpsData.timestamp
+                        } : null
+                    };
+                } catch (error) {
+                    console.error(`Error fetching TPS for chain ${chain.chainId}:`, error);
+                    return chain;
+                }
+            }));
+            
+            return chainsWithTps;
         } catch (error) {
             throw new Error(`Error fetching chains: ${error.message}`);
         }

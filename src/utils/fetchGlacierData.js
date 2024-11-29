@@ -2,6 +2,7 @@ const chainService = require('../services/chainService');
 const tvlService = require('../services/tvlService');
 const chainDataService = require('../services/chainDataService');
 const Chain = require('../models/chain');
+const tpsService = require('../services/tpsService');
 
 const fetchAndUpdateData = async () => {
     try {
@@ -39,6 +40,16 @@ const fetchAndUpdateData = async () => {
             }
         } else {
             console.warn('No chains fetched from API, skipping database update');
+        }
+
+        // Update TPS data for each chain
+        for (const chain of chains) {
+            try {
+                await tpsService.updateTpsData(chain.chainId);
+                console.log(`Updated TPS data for chain ${chain.chainId}`);
+            } catch (error) {
+                console.error(`Failed to update TPS data for chain ${chain.chainId}:`, error);
+            }
         }
 
         // Update TVL data independently

@@ -37,7 +37,12 @@ const chainSchema = new mongoose.Schema({
         uptimePerformance: Number,
         avalancheGoVersion: String
     }],
-    lastUpdated: { type: Date, default: Date.now }
+    lastUpdated: { type: Date, default: Date.now },
+    tps: {
+        value: Number,
+        timestamp: Number,
+        lastUpdated: Date
+    }
 });
 
 module.exports = mongoose.model('Chain', chainSchema);
