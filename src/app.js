@@ -12,6 +12,7 @@ const chainDataService = require('./services/chainDataService');
 const Chain = require('./models/chain');
 const chainService = require('./services/chainService');
 const tpsRoutes = require('./routes/tpsRoutes');
+const tpsService = require('./services/tpsService');
 
 const app = express();
 
@@ -50,6 +51,8 @@ const initializeDataUpdates = async () => {
     if (chains && chains.length > 0) {
       for (const chain of chains) {
         await chainService.updateChain(chain);
+        // Add initial TPS update for each chain
+        await tpsService.updateTpsData(chain.chainId);
       }
       console.log(`Updated ${chains.length} chains in database`);
       
@@ -79,35 +82,35 @@ const initializeDataUpdates = async () => {
     console.error('Initialization error:', error);
   }
 
-  // Set up scheduled updates
-  if (process.env.NODE_ENV === 'production') {
-    console.log('Setting up update schedules...');
-    
-    // TVL updates every 30 minutes
-    cron.schedule('*/30 * * * *', async () => {
-      try {
-        console.log(`[CRON] Starting scheduled TVL update at ${new Date().toISOString()}`);
-        await tvlService.updateTvlData();
-        console.log('[CRON] TVL update completed');
-      } catch (error) {
-        console.error('[CRON] TVL update failed:', error);
-      }
-    });
+  // Set up scheduled updates for both production and development
+  console.log('Setting up update schedules...');
+  
+  // TVL updates every 30 minutes
+  cron.schedule('*/30 * * * *', async () => {
+    try {
+      console.log(`[CRON] Starting scheduled TVL update at ${new Date().toISOString()}`);
+      await tvlService.updateTvlData();
+      console.log('[CRON] TVL update completed');
+    } catch (error) {
+      console.error('[CRON] TVL update failed:', error);
+    }
+  });
 
-    // Chain updates every hour
-    cron.schedule('0 * * * *', async () => {
-      try {
-        console.log(`[CRON] Starting scheduled chain update at ${new Date().toISOString()}`);
-        const chains = await chainDataService.fetchChainData();
-        for (const chain of chains) {
-          await chainService.updateChain(chain);
-        }
-        console.log(`[CRON] Updated ${chains.length} chains`);
-      } catch (error) {
-        console.error('[CRON] Chain update failed:', error);
+  // Chain and TPS updates every hour
+  cron.schedule('0 * * * *', async () => {
+    try {
+      console.log(`[CRON] Starting scheduled chain update at ${new Date().toISOString()}`);
+      const chains = await chainDataService.fetchChainData();
+      for (const chain of chains) {
+        await chainService.updateChain(chain);
+        // Add TPS update for each chain
+        await tpsService.updateTpsData(chain.chainId);
       }
-    });
-  }
+      console.log(`[CRON] Updated ${chains.length} chains with TPS data`);
+    } catch (error) {
+      console.error('[CRON] Chain/TPS update failed:', error);
+    }
+  });
 };
 
 // Call initialization after DB connection
