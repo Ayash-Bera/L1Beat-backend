@@ -65,4 +65,42 @@ if (process.env.NODE_ENV === 'development') {
   });
 }
 
+// Add new route for total network TPS
+router.get('/tps/network/latest', async (req, res) => {
+  try {
+    const data = await tpsService.getNetworkTps();
+    res.json({
+      success: true,
+      data,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Network TPS Error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// Add new route for historical network TPS
+router.get('/tps/network/history', async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 7;
+    const data = await tpsService.getNetworkTpsHistory(days);
+    res.json({
+      success: true,
+      data,
+      count: data.length,
+      period: `${days} days`
+    });
+  } catch (error) {
+    console.error('Network TPS History Error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
 module.exports = router; 

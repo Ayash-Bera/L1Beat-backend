@@ -1,5 +1,6 @@
 const TPS = require('../models/tps');
 const axios = require('axios');
+const Chain = require('../models/chain');
 
 class TpsService {
   async updateTpsData(chainId, retryCount = 3) {
@@ -105,6 +106,90 @@ class TpsService {
       return latest;
     } catch (error) {
       throw new Error(`Error fetching latest TPS: ${error.message}`);
+    }
+  }
+
+  async getNetworkTps() {
+    try {
+      // Get all chains to ensure we have their IDs
+      const chains = await Chain.find().select('chainId').lean();
+      
+      // Get the latest TPS for each chain
+      const latestTpsPromises = chains.map(chain => 
+        TPS.findOne({ chainId: chain.chainId })
+          .sort({ timestamp: -1 })
+          .select('value timestamp')
+          .lean()
+      );
+
+      const tpsResults = await Promise.all(latestTpsPromises);
+      
+      // Filter out null results and calculate total
+      const validResults = tpsResults.filter(result => result !== null);
+      const total = validResults.reduce((sum, result) => sum + (result.value || 0), 0);
+      
+      // Find the most recent timestamp
+      const latestTimestamp = Math.max(...validResults.map(result => result.timestamp));
+
+      return {
+        totalTps: parseFloat(total.toFixed(2)),
+        chainCount: validResults.length,
+        timestamp: latestTimestamp,
+        updatedAt: new Date().toISOString()
+      };
+    } catch (error) {
+      throw new Error(`Error calculating network TPS: ${error.message}`);
+    }
+  }
+
+  async getNetworkTpsHistory(days = 7) {
+    try {
+      const cutoffDate = Math.floor(Date.now() / 1000) - (days * 24 * 60 * 60);
+      
+      // Get all chains
+      const chains = await Chain.find().select('chainId').lean();
+      
+      // Get TPS data for all chains within the time range
+      const tpsData = await TPS.aggregate([
+        {
+          $match: {
+            chainId: { $in: chains.map(c => c.chainId) },
+            timestamp: { $gte: cutoffDate }
+          }
+        },
+        {
+          // Group by timestamp and sum the values
+          $group: {
+            _id: '$timestamp',
+            totalTps: { $sum: '$value' },
+            chainCount: { $sum: 1 }
+          }
+        },
+        {
+          // Format the output
+          $project: {
+            _id: 0,
+            timestamp: '$_id',
+            totalTps: { $round: ['$totalTps', 2] },
+            chainCount: 1
+          }
+        },
+        {
+          // Sort by timestamp
+          $sort: { timestamp: 1 }
+        }
+      ]);
+
+      // Add metadata to each data point
+      const enrichedData = tpsData.map(point => ({
+        ...point,
+        date: new Date(point.timestamp * 1000).toISOString()
+      }));
+
+      console.log(`Found ${enrichedData.length} historical network TPS records`);
+      return enrichedData;
+    } catch (error) {
+      throw new Error(`Error fetching network TPS history: ${error.message}`);
     }
   }
 }
