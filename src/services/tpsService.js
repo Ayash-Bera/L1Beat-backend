@@ -11,23 +11,107 @@ class TpsService {
         const response = await axios.get(`https://popsicle-api.avax.network/v1/avg_tps/${chainId}`, {
           timeout: 15000,
           headers: {
-            'Accept': 'application/json'
+            'Accept': 'application/json',
+            'User-Agent': 'l1beat-backend'
           }
         });
 
+        // Log raw response for debugging
+        console.log(`Raw API response for chain ${chainId}:`, {
+          status: response.status,
+          hasData: !!response.data,
+          resultsLength: response.data?.results?.length,
+          sample: response.data?.results?.[0]
+        });
+
         if (!response.data || !Array.isArray(response.data.results)) {
-          throw new Error('Invalid response format from Popsicle API');
+          console.warn(`No TPS data available for chain ${chainId} - skipping`);
+          return null;
         }
 
         const tpsData = response.data.results;
-        console.log(`Received ${tpsData.length} TPS records for chain ${chainId}`);
+        if (tpsData.length === 0) {
+          console.warn(`Empty TPS data for chain ${chainId} - skipping`);
+          return null;
+        }
+        
+        // Validate timestamps before processing
+        const validTpsData = tpsData.filter(item => {
+          // Check if timestamp is a valid number and not too far in the past or future
+          const timestamp = Number(item.timestamp);
+          if (isNaN(timestamp)) {
+            console.warn(`Invalid timestamp found for chain ${chainId}:`, item);
+            return false;
+          }
+          
+          const date = new Date(timestamp * 1000);
+          if (date.toString() === 'Invalid Date') {
+            console.warn(`Invalid date conversion for chain ${chainId}:`, { timestamp, item });
+            return false;
+          }
+          
+          // Reject timestamps more than 30 days in the past or any future timestamps
+          const now = Date.now();
+          const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
+          const isValid = date.getTime() >= thirtyDaysAgo && date.getTime() <= now;
+          
+          if (!isValid) {
+            console.warn(`Timestamp out of range for chain ${chainId}:`, {
+              timestamp,
+              date: date.toISOString(),
+              now: new Date(now).toISOString(),
+              thirtyDaysAgo: new Date(thirtyDaysAgo).toISOString()
+            });
+          }
+          return isValid;
+        });
+
+        if (validTpsData.length === 0) {
+          console.warn(`No valid TPS data found for chain ${chainId} - skipping`);
+          return null;
+        }
+
+        // Now process only valid timestamps
+        const timestamps = validTpsData.map(item => Number(item.timestamp));
+        const mostRecent = Math.max(...timestamps);
+        const oldest = Math.min(...timestamps);
+        
+        console.log(`TPS API Response Analysis for chain ${chainId}:`, {
+          totalRecords: tpsData.length,
+          validRecords: validTpsData.length,
+          oldestRecord: new Date(oldest * 1000).toISOString(),
+          mostRecentRecord: new Date(mostRecent * 1000).toISOString(),
+          currentTime: new Date().toISOString(),
+          dataAge: Math.floor((Date.now()/1000 - mostRecent)/60), // in minutes
+          sampleRecord: validTpsData[0],
+          environment: process.env.NODE_ENV
+        });
+
+        const sevenDaysAgo = Math.floor(Date.now() / 1000) - (7 * 24 * 60 * 60);
+        const recentTpsData = validTpsData.filter(item => Number(item.timestamp) >= sevenDaysAgo);
+
+        // Log what we're actually storing
+        console.log(`Filtered TPS data for chain ${chainId}:`, {
+          originalCount: tpsData.length,
+          validCount: validTpsData.length,
+          filteredCount: recentTpsData.length,
+          oldestKept: recentTpsData.length ? 
+            new Date(Math.min(...recentTpsData.map(d => Number(d.timestamp) * 1000))).toISOString() : null,
+          newestKept: recentTpsData.length ? 
+            new Date(Math.max(...recentTpsData.map(d => Number(d.timestamp) * 1000))).toISOString() : null
+        });
+
+        if (recentTpsData.length === 0) {
+          console.warn(`No recent TPS data available for chain ${chainId}`);
+          return null;
+        }
 
         const result = await TPS.bulkWrite(
-          tpsData.map(item => ({
+          recentTpsData.map(item => ({
             updateOne: {
               filter: { 
                 chainId: chainId,
-                timestamp: item.timestamp 
+                timestamp: Number(item.timestamp)
               },
               update: { 
                 $set: { 
@@ -43,7 +127,8 @@ class TpsService {
         console.log(`TPS Update completed for chain ${chainId}:`, {
           matched: result.matchedCount,
           modified: result.modifiedCount,
-          upserted: result.upsertedCount
+          upserted: result.upsertedCount,
+          environment: process.env.NODE_ENV
         });
 
         return result;
@@ -52,13 +137,26 @@ class TpsService {
         console.error(`TPS Update Error for chain ${chainId} (Attempt ${attempt}/${retryCount}):`, {
           message: error.message,
           status: error.response?.status,
-          data: error.response?.data
+          data: error.response?.data,
+          environment: process.env.NODE_ENV,
+          stack: error.stack
         });
 
-        if (attempt === retryCount) throw error;
+        // Don't retry if it's a 404 or other indication that the chain doesn't have TPS data
+        if (error.response?.status === 404 || error.response?.status === 400) {
+          console.warn(`Chain ${chainId} appears to not have TPS data - skipping`);
+          return null;
+        }
+
+        if (attempt === retryCount) {
+          // Don't throw on final attempt, just return null
+          console.warn(`All attempts failed for chain ${chainId} - skipping`);
+          return null;
+        }
         await new Promise(resolve => setTimeout(resolve, attempt * 1000));
       }
     }
+    return null;
   }
 
   async getTpsHistory(chainId, days = 30) {
@@ -111,33 +209,82 @@ class TpsService {
 
   async getNetworkTps() {
     try {
-      // Get all chains to ensure we have their IDs
       const chains = await Chain.find().select('chainId').lean();
       
-      // Get the latest TPS for each chain
+      const currentTime = Math.floor(Date.now() / 1000);
+      const oneDayAgo = currentTime - (24 * 60 * 60);
+
+      console.log('Time boundaries:', {
+        currentTime: new Date(currentTime * 1000).toISOString(),
+        oneDayAgo: new Date(oneDayAgo * 1000).toISOString(),
+        environment: process.env.NODE_ENV
+      });
+
       const latestTpsPromises = chains.map(chain => 
-        TPS.findOne({ chainId: chain.chainId })
+        TPS.findOne({ 
+          chainId: chain.chainId,
+          timestamp: { $gte: oneDayAgo }
+        })
           .sort({ timestamp: -1 })
           .select('value timestamp')
           .lean()
       );
 
       const tpsResults = await Promise.all(latestTpsPromises);
-      
-      // Filter out null results and calculate total
       const validResults = tpsResults.filter(result => result !== null);
-      const total = validResults.reduce((sum, result) => sum + (result.value || 0), 0);
       
-      // Find the most recent timestamp
-      const latestTimestamp = Math.max(...validResults.map(result => result.timestamp));
+      const timestamps = validResults.map(r => r.timestamp);
+      const futureTimestamps = timestamps.filter(t => t > currentTime);
+      if (futureTimestamps.length > 0) {
+        console.warn('Found future timestamps:', {
+          count: futureTimestamps.length,
+          timestamps: futureTimestamps.map(t => new Date(t * 1000).toISOString())
+        });
+      }
+
+      console.log('Network TPS calculation:', {
+        totalChains: chains.length,
+        validResults: validResults.length,
+        oldestTimestamp: validResults.length ? new Date(Math.min(...timestamps) * 1000).toISOString() : null,
+        newestTimestamp: validResults.length ? new Date(Math.max(...timestamps) * 1000).toISOString() : null,
+        currentTime: new Date(currentTime * 1000).toISOString(),
+        environment: process.env.NODE_ENV
+      });
+
+      if (validResults.length === 0) {
+        return {
+          totalTps: 0,
+          chainCount: 0,
+          timestamp: currentTime,
+          updatedAt: new Date().toISOString(),
+          dataAge: 0,
+          dataAgeUnit: 'minutes'
+        };
+      }
+
+      const total = validResults.reduce((sum, result) => sum + (result.value || 0), 0);
+      const latestTimestamp = Math.max(...timestamps);
+      const dataAge = Math.max(0, Math.floor((currentTime - latestTimestamp) / 60)); // Convert to minutes
+
+      if (dataAge > 24 * 60) { // More than 24 hours in minutes
+        console.warn(`TPS data is ${dataAge} minutes old (${(dataAge/60).toFixed(1)} hours)`);
+      }
 
       return {
         totalTps: parseFloat(total.toFixed(2)),
         chainCount: validResults.length,
         timestamp: latestTimestamp,
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
+        dataAge,
+        dataAgeUnit: 'minutes',
+        lastUpdate: new Date(latestTimestamp * 1000).toISOString()
       };
     } catch (error) {
+      console.error('Error calculating network TPS:', {
+        message: error.message,
+        stack: error.stack,
+        environment: process.env.NODE_ENV
+      });
       throw new Error(`Error calculating network TPS: ${error.message}`);
     }
   }
