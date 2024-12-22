@@ -1,0 +1,41 @@
+name: Update Chain Data
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'  # Every 30 minutes
+  workflow_dispatch:         # Manual trigger
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update All Data
+        id: update
+        run: |
+          response=$(curl -s -X POST \
+            -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            "https://backend-phi-green.vercel.app/api/update/batch")
+          echo "Response: $response"
+          echo "$response" | jq -e '.success == true'
+        
+      - name: Check for Stale Data
+        if: always()
+        run: |
+          response=$(curl -s \
+            -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
+            "https://backend-phi-green.vercel.app/api/health")
+          echo "Health check response: $response"
+          echo "$response" | jq -e '.staleChains | length == 0'
+
+      - name: Notify on Failure
+        if: failure()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'Data Update Failed',
+              body: `Update job failed at ${new Date().toISOString()}\nPlease check the GitHub Actions logs.`
+            }) 
