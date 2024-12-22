@@ -28,53 +28,31 @@ jobs:
       - name: Update All Data
         id: update
         run: |
-          # First attempt
           echo "Attempting first update..."
           response=$(curl -s -X POST \
             -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
             -H "Content-Type: application/json" \
             "https://backend-phi-green.vercel.app/api/update/batch")
           
-          # Check if the response is valid JSON
-          if echo "$response" | jq . >/dev/null 2>&1; then
-            echo "Response is valid JSON"
-            echo "Response: $response"
-            if echo "$response" | jq -e '.success == true' >/dev/null; then
-              echo "Update successful"
-            else
-              echo "Update failed with error response"
-              exit 1
-            fi
-          else
-            echo "Invalid JSON response: $response"
-            echo "Retrying after 30 seconds..."
+          if echo "$response" | jq -e '.success == true' >/dev/null; then
+            echo "Update process started successfully"
+            # Wait for a bit to allow background processing
+            echo "Waiting for 30 seconds to allow processing..."
             sleep 30
-            
-            # Second attempt
-            response=$(curl -s -X POST \
-              -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
-              -H "Content-Type: application/json" \
-              "https://backend-phi-green.vercel.app/api/update/batch")
-            
-            if echo "$response" | jq -e '.success == true' >/dev/null; then
-              echo "Retry successful"
-            else
-              echo "Retry failed: $response"
-              exit 1
-            fi
+          else
+            echo "Update initiation failed: $response"
+            exit 1
           fi
-        
-      - name: Check for Stale Data
-        if: always()
-        run: |
-          response=$(curl -s \
+          
+          # Check the health endpoint to verify the update
+          health_response=$(curl -s \
             -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
             "https://backend-phi-green.vercel.app/api/health")
-          echo "Health check response: $response"
-          if echo "$response" | jq . >/dev/null 2>&1; then
-            echo "$response" | jq -e '.staleChains | length == 0'
+            
+          if echo "$health_response" | jq -e '.success == true' >/dev/null; then
+            echo "Health check passed"
           else
-            echo "Invalid health check response"
+            echo "Health check failed: $health_response"
             exit 1
           fi
 

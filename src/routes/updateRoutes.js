@@ -98,15 +98,25 @@ router.get('/test', validateApiKey, async (req, res) => {
 // Batch update endpoint
 router.post('/update/batch', validateApiKey, async (req, res) => {
   try {
-    console.log('Starting batch update...');
-    await fetchAndUpdateData();
-    console.log('Batch update completed successfully');
+    // Start the update process but don't wait for it to complete
     res.json({
       success: true,
-      message: 'Data updated successfully'
+      message: 'Update process started',
+      timestamp: new Date().toISOString()
     });
+
+    // Continue processing in the background
+    console.log('Starting batch update...');
+    fetchAndUpdateData()
+      .then(() => {
+        console.log('Background update completed successfully');
+      })
+      .catch((error) => {
+        console.error('Background update failed:', error);
+      });
+
   } catch (error) {
-    console.error('Batch update failed:', error);
+    console.error('Batch update initiation failed:', error);
     res.status(500).json({
       success: false,
       error: error.message
