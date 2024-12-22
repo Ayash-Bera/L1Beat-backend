@@ -13,6 +13,7 @@ const chainService = require('./services/chainService');
 const tpsRoutes = require('./routes/tpsRoutes');
 const tpsService = require('./services/tpsService');
 const updateRoutes = require('./routes/updateRoutes');
+const mongoose = require('mongoose');
 
 const app = express();
 
@@ -75,10 +76,27 @@ app.use('/api', updateRoutes);
 
 // Add test endpoint
 app.get('/api/test', validateApiKey, (req, res) => {
-  res.json({
-    success: true,
-    message: "API is working correctly"
-  });
+  try {
+    console.log('Test endpoint called with API key:', !!req.headers['x-api-key']);
+    
+    // Test database connection
+    const dbStatus = mongoose.connection.readyState;
+    console.log('Database connection state:', dbStatus);
+    
+    res.json({
+      success: true,
+      message: "API is working correctly",
+      timestamp: new Date().toISOString(),
+      dbStatus: dbStatus === 1 ? 'connected' : 'disconnected'
+    });
+  } catch (error) {
+    console.error('Test endpoint error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
 });
 
 // Health check endpoint
@@ -96,13 +114,21 @@ if (isDevelopment) {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
+  console.error('Error details:', {
+    message: err.message,
+    stack: err.stack,
+    path: req.path,
+    method: req.method,
+    headers: req.headers,
+    timestamp: new Date().toISOString()
+  });
   
-  // Send proper JSON response
   res.status(500).json({
+    success: false,
     error: 'Internal Server Error',
     message: err.message,
-    path: req.path
+    path: req.path,
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -145,3 +171,12 @@ if (process.env.NODE_ENV !== 'production') {
         console.error('Production server error:', error);
     });
 }
+
+// Add error event handler for uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
