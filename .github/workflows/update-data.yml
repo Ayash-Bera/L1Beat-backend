@@ -13,6 +13,18 @@ jobs:
   update-data:
     runs-on: ubuntu-latest
     steps:
+      - name: Test Connection
+        run: |
+          echo "Testing API connection..."
+          response=$(curl -s \
+            -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
+            "https://backend-phi-green.vercel.app/api/test")
+          echo "Test response: $response"
+          if ! echo "$response" | jq -e '.success == true' >/dev/null; then
+            echo "API test failed"
+            exit 1
+          fi
+
       - name: Update All Data
         id: update
         run: |

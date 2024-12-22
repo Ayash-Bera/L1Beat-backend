@@ -76,4 +76,17 @@ router.get('/health', validateApiKey, async (req, res) => {
   }
 });
 
+// Add this test endpoint
+router.get('/test', validateApiKey, async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      message: 'Test endpoint working',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 module.exports = router; 
