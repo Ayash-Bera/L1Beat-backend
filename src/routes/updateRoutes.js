@@ -3,12 +3,18 @@ const router = express.Router();
 const Chain = require('../models/chain');
 const tpsService = require('../services/tpsService');
 const tvlService = require('../services/tvlService');
+const fetchAndUpdateData = require('../utils/fetchGlacierData');
 
 // Middleware to check API key
 const validateApiKey = (req, res, next) => {
   const apiKey = req.headers['x-api-key'];
-  if (!process.env.UPDATE_API_KEY || apiKey !== process.env.UPDATE_API_KEY) {
-    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  const validApiKey = process.env.UPDATE_API_KEY;
+
+  if (!apiKey || apiKey !== validApiKey) {
+    return res.status(401).json({
+      success: false,
+      error: "Unauthorized"
+    });
   }
   next();
 };
@@ -86,6 +92,25 @@ router.get('/test', validateApiKey, async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Batch update endpoint
+router.post('/update/batch', validateApiKey, async (req, res) => {
+  try {
+    console.log('Starting batch update...');
+    await fetchAndUpdateData();
+    console.log('Batch update completed successfully');
+    res.json({
+      success: true,
+      message: 'Data updated successfully'
+    });
+  } catch (error) {
+    console.error('Batch update failed:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 
