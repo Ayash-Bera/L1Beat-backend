@@ -1,7 +1,6 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const cron = require('node-cron');
 const connectDB = require('./config/db');
 const chainRoutes = require('./routes/chainRoutes');
 const fetchAndUpdateData = require('./utils/fetchGlacierData');
@@ -13,6 +12,7 @@ const Chain = require('./models/chain');
 const chainService = require('./services/chainService');
 const tpsRoutes = require('./routes/tpsRoutes');
 const tpsService = require('./services/tpsService');
+const updateRoutes = require('./routes/updateRoutes');
 
 const app = express();
 
@@ -40,82 +40,12 @@ app.use(express.json());
 
 // Single initialization point for data updates
 const initializeDataUpdates = async () => {
-  console.log(`[${process.env.NODE_ENV}] Initializing data updates at ${new Date().toISOString()}`);
-  
+  console.log(`[${process.env.NODE_ENV}] Initializing data...`);
   try {
-    // First update chains
-    console.log('Fetching initial chain data...');
-    const chains = await chainDataService.fetchChainData();
-    console.log(`Fetched ${chains.length} chains from Glacier API`);
-
-    if (chains && chains.length > 0) {
-      for (const chain of chains) {
-        await chainService.updateChain(chain);
-        // Add initial TPS update for each chain
-        await tpsService.updateTpsData(chain.chainId);
-      }
-      console.log(`Updated ${chains.length} chains in database`);
-      
-      // Verify chains were saved
-      const savedChains = await Chain.find();
-      console.log('Chains in database:', {
-        count: savedChains.length,
-        chainIds: savedChains.map(c => c.chainId)
-      });
-    } else {
-      console.error('No chains fetched from Glacier API');
-    }
-
-    // Then update TVL
-    console.log('Updating TVL data...');
-    await tvlService.updateTvlData();
-    
-    // Verify TVL update
-    const lastTVL = await TVL.findOne().sort({ date: -1 });
-    console.log('TVL Update Result:', {
-      lastUpdate: lastTVL?.date ? new Date(lastTVL.date * 1000).toISOString() : 'none',
-      tvl: lastTVL?.tvl,
-      timestamp: new Date().toISOString()
-    });
-
+    await fetchAndUpdateData();
   } catch (error) {
     console.error('Initialization error:', error);
   }
-
-  // Set up scheduled updates for both production and development
-  console.log('Setting up update schedules...');
-  
-  // TVL updates every 30 minutes
-  cron.schedule('*/30 * * * *', async () => {
-    try {
-      console.log(`[CRON] Starting scheduled TVL update at ${new Date().toISOString()}`);
-      await tvlService.updateTvlData();
-      console.log('[CRON] TVL update completed');
-    } catch (error) {
-      console.error('[CRON] TVL update failed:', error);
-    }
-  });
-
-  // Chain and TPS updates every hour
-  cron.schedule('0 * * * *', async () => {
-    try {
-      console.log(`[CRON] Starting scheduled chain update at ${new Date().toISOString()}`);
-      const chains = await chainDataService.fetchChainData();
-      for (const chain of chains) {
-        await chainService.updateChain(chain);
-        // Update TPS data independently to ensure it runs even if chain update fails
-        try {
-          await tpsService.updateTpsData(chain.chainId);
-          console.log(`[CRON] Updated TPS data for chain ${chain.chainId}`);
-        } catch (tpsError) {
-          console.error(`[CRON] Failed to update TPS for chain ${chain.chainId}:`, tpsError);
-        }
-      }
-      console.log(`[CRON] Updated ${chains.length} chains with TPS data`);
-    } catch (error) {
-      console.error('[CRON] Chain/TPS update failed:', error);
-    }
-  });
 };
 
 // Call initialization after DB connection
@@ -127,6 +57,7 @@ connectDB().then(() => {
 app.use('/api', chainRoutes);
 app.use('/api', tvlRoutes);
 app.use('/api', tpsRoutes);
+app.use('/api', updateRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
