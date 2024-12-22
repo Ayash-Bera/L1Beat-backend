@@ -13,67 +13,37 @@ const validateApiKey = (req, res, next) => {
   next();
 };
 
-// Batch update endpoint
-router.post('/update/batch', validateApiKey, async (req, res) => {
+// Update single chain TPS
+router.post('/update/chain/:chainId/tps', validateApiKey, async (req, res) => {
   try {
-    console.log('Starting batch update...');
-    const startTime = Date.now();
-    
-    // Get all chains
-    const chains = await Chain.find().select('chainId');
-    const results = [];
-    const batchSize = 3; // Process 3 chains at a time
-
-    // Process chains in batches
-    for (let i = 0; i < chains.length; i += batchSize) {
-      const batch = chains.slice(i, i + batchSize);
-      
-      // Update TPS for each chain in the batch
-      for (const chain of batch) {
-        try {
-          await tpsService.updateTpsData(chain.chainId);
-          const latestTps = await tpsService.getLatestTps(chain.chainId);
-          results.push({
-            chainId: chain.chainId,
-            success: true,
-            latestTps
-          });
-        } catch (error) {
-          console.error(`Failed to update chain ${chain.chainId}:`, error);
-          results.push({
-            chainId: chain.chainId,
-            success: false,
-            error: error.message
-          });
-        }
-      }
-    }
-
-    // Update TVL separately
-    try {
-      await tvlService.updateTvlData();
-      results.push({
-        type: 'tvl',
-        success: true
-      });
-    } catch (error) {
-      results.push({
-        type: 'tvl',
-        success: false,
-        error: error.message
-      });
-    }
-
-    const duration = (Date.now() - startTime) / 1000;
+    const { chainId } = req.params;
+    await tpsService.updateTpsData(chainId);
+    const latestTps = await tpsService.getLatestTps(chainId);
     
     res.json({
       success: true,
-      timestamp: new Date().toISOString(),
-      duration: `${duration.toFixed(2)}s`,
-      results
+      chainId,
+      latestTps
     });
   } catch (error) {
-    console.error('Batch update failed:', error);
+    console.error(`Failed to update chain ${chainId}:`, error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// Update TVL
+router.post('/update/tvl', validateApiKey, async (req, res) => {
+  try {
+    await tvlService.updateTvlData();
+    res.json({
+      success: true,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('TVL update failed:', error);
     res.status(500).json({ 
       success: false, 
       error: error.message 
