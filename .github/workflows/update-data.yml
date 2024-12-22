@@ -6,8 +6,8 @@ on:
   workflow_dispatch:         # Manual trigger
 
 permissions:
-  issues: write  # Add permission to create issues
-  contents: read # Basic read permission
+  issues: write
+  contents: read
 
 jobs:
   update-data:
@@ -16,12 +16,41 @@ jobs:
       - name: Update All Data
         id: update
         run: |
+          # First attempt
+          echo "Attempting first update..."
           response=$(curl -s -X POST \
             -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
             -H "Content-Type: application/json" \
             "https://backend-phi-green.vercel.app/api/update/batch")
-          echo "Response: $response"
-          echo "$response" | jq -e '.success == true'
+          
+          # Check if the response is valid JSON
+          if echo "$response" | jq . >/dev/null 2>&1; then
+            echo "Response is valid JSON"
+            echo "Response: $response"
+            if echo "$response" | jq -e '.success == true' >/dev/null; then
+              echo "Update successful"
+            else
+              echo "Update failed with error response"
+              exit 1
+            fi
+          else
+            echo "Invalid JSON response: $response"
+            echo "Retrying after 30 seconds..."
+            sleep 30
+            
+            # Second attempt
+            response=$(curl -s -X POST \
+              -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
+              -H "Content-Type: application/json" \
+              "https://backend-phi-green.vercel.app/api/update/batch")
+            
+            if echo "$response" | jq -e '.success == true' >/dev/null; then
+              echo "Retry successful"
+            else
+              echo "Retry failed: $response"
+              exit 1
+            fi
+          fi
         
       - name: Check for Stale Data
         if: always()
@@ -30,7 +59,12 @@ jobs:
             -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
             "https://backend-phi-green.vercel.app/api/health")
           echo "Health check response: $response"
-          echo "$response" | jq -e '.staleChains | length == 0'
+          if echo "$response" | jq . >/dev/null 2>&1; then
+            echo "$response" | jq -e '.staleChains | length == 0'
+          else
+            echo "Invalid health check response"
+            exit 1
+          fi
 
       - name: Notify on Failure
         if: failure()
@@ -42,4 +76,4 @@ jobs:
               repo: context.repo.repo,
               title: 'Data Update Failed',
               body: `Update job failed at ${new Date().toISOString()}\nPlease check the GitHub Actions logs.`
-            }) 
+            })

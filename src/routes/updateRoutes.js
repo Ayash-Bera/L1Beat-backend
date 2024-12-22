@@ -22,28 +22,34 @@ router.post('/update/batch', validateApiKey, async (req, res) => {
     // Get all chains
     const chains = await Chain.find().select('chainId');
     const results = [];
+    const batchSize = 3; // Process 3 chains at a time
 
-    // Update TPS for each chain
-    for (const chain of chains) {
-      try {
-        await tpsService.updateTpsData(chain.chainId);
-        const latestTps = await tpsService.getLatestTps(chain.chainId);
-        results.push({
-          chainId: chain.chainId,
-          success: true,
-          latestTps
-        });
-      } catch (error) {
-        console.error(`Failed to update chain ${chain.chainId}:`, error);
-        results.push({
-          chainId: chain.chainId,
-          success: false,
-          error: error.message
-        });
+    // Process chains in batches
+    for (let i = 0; i < chains.length; i += batchSize) {
+      const batch = chains.slice(i, i + batchSize);
+      
+      // Update TPS for each chain in the batch
+      for (const chain of batch) {
+        try {
+          await tpsService.updateTpsData(chain.chainId);
+          const latestTps = await tpsService.getLatestTps(chain.chainId);
+          results.push({
+            chainId: chain.chainId,
+            success: true,
+            latestTps
+          });
+        } catch (error) {
+          console.error(`Failed to update chain ${chain.chainId}:`, error);
+          results.push({
+            chainId: chain.chainId,
+            success: false,
+            error: error.message
+          });
+        }
       }
     }
 
-    // Update TVL
+    // Update TVL separately
     try {
       await tvlService.updateTvlData();
       results.push({
