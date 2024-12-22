@@ -103,8 +103,13 @@ const initializeDataUpdates = async () => {
       const chains = await chainDataService.fetchChainData();
       for (const chain of chains) {
         await chainService.updateChain(chain);
-        // Add TPS update for each chain
-        await tpsService.updateTpsData(chain.chainId);
+        // Update TPS data independently to ensure it runs even if chain update fails
+        try {
+          await tpsService.updateTpsData(chain.chainId);
+          console.log(`[CRON] Updated TPS data for chain ${chain.chainId}`);
+        } catch (tpsError) {
+          console.error(`[CRON] Failed to update TPS for chain ${chain.chainId}:`, tpsError);
+        }
       }
       console.log(`[CRON] Updated ${chains.length} chains with TPS data`);
     } catch (error) {
