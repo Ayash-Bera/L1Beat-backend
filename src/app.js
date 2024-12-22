@@ -38,6 +38,20 @@ app.use(cors({
 
 app.use(express.json());
 
+// Add API key middleware
+const validateApiKey = (req, res, next) => {
+  const apiKey = req.headers['x-api-key'];
+  const validApiKey = process.env.UPDATE_API_KEY;
+
+  if (!apiKey || apiKey !== validApiKey) {
+    return res.status(401).json({
+      success: false,
+      error: "Unauthorized"
+    });
+  }
+  next();
+};
+
 // Single initialization point for data updates
 const initializeDataUpdates = async () => {
   console.log(`[${process.env.NODE_ENV}] Initializing data...`);
@@ -58,6 +72,14 @@ app.use('/api', chainRoutes);
 app.use('/api', tvlRoutes);
 app.use('/api', tpsRoutes);
 app.use('/api', updateRoutes);
+
+// Add test endpoint
+app.get('/api/test', validateApiKey, (req, res) => {
+  res.json({
+    success: true,
+    message: "API is working correctly"
+  });
+});
 
 // Health check endpoint
 app.get('/health', (req, res) => {

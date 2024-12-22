@@ -17,12 +17,7 @@
     }
   ],
   "env": {
-    "NODE_ENV": "production"
-  },
-  "functions": {
-    "src/app.js": {
-      "memory": 1024,
-      "maxDuration": 60
-    }
+    "NODE_ENV": "production",
+    "UPDATE_API_KEY": "@update_api_key"
   }
 }
