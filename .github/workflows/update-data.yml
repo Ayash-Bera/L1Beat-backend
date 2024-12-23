@@ -115,12 +115,20 @@ jobs:
           fi
           
           if echo "$raw_response" | jq -e . >/dev/null 2>&1; then
-            if [ "$(echo "$raw_response" | jq -r '.success')" = "true" ]; then
+            success=$(echo "$raw_response" | jq -r '.success')
+            status=$(echo "$raw_response" | jq -r '.status')
+            dbState=$(echo "$raw_response" | jq -r '.metrics.dbState')
+            
+            echo "Health check results:"
+            echo "Success: $success"
+            echo "Status: $status"
+            echo "DB State: $dbState"
+            
+            if [ "$success" = "true" ] && [ "$status" != "error" ]; then
               echo "Health check passed"
-              echo "DB Connected: $(echo "$raw_response" | jq -r '.metrics.dbConnected')"
             else
               echo "Health check failed"
-              echo "Error: $(echo "$raw_response" | jq -r '.error')"
+              echo "Error: $(echo "$raw_response" | jq -r '.error // "Unknown error"')"
               exit 1
             fi
           else

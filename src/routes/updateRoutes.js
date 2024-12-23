@@ -59,25 +59,54 @@ router.post('/update/tvl', validateApiKey, async (req, res) => {
 });
 
 // Health check endpoint
-router.get('/health', validateApiKey, (req, res) => {
+router.get('/health', validateApiKey, async (req, res) => {
   try {
-    // Remove async operations completely
-    // Just check DB connection state
-    const isConnected = mongoose.connection.readyState === 1;
+    // Get DB connection state
+    const dbState = mongoose.connection.readyState;
+    const isConnected = dbState === 1;
     
+    // Log detailed connection info
     console.log('Health check - DB connection state:', {
-      readyState: mongoose.connection.readyState,
+      readyState: dbState,
       isConnected,
       host: mongoose.connection.host,
-      environment: process.env.NODE_ENV
+      name: mongoose.connection.name,
+      environment: process.env.NODE_ENV,
+      timestamp: new Date().toISOString()
     });
+
+    // If not connected, try to reconnect
+    if (!isConnected) {
+      console.log('Database not connected, attempting to reconnect...');
+      try {
+        await mongoose.connect(
+          process.env.NODE_ENV === 'production' 
+            ? process.env.PROD_MONGODB_URI 
+            : process.env.DEV_MONGODB_URI,
+          {
+            useNewUrlParser: true,
+            useUnifiedTopology: true,
+            serverSelectionTimeoutMS: 5000
+          }
+        );
+        console.log('Reconnection successful');
+      } catch (dbError) {
+        console.error('Reconnection failed:', dbError);
+      }
+    }
+
+    // Get updated connection state
+    const finalDbState = mongoose.connection.readyState;
+    const finalIsConnected = finalDbState === 1;
 
     res.json({
       success: true,
-      status: 'ok',
+      status: finalIsConnected ? 'ok' : 'degraded',
       timestamp: Date.now(),
       metrics: {
-        dbConnected: isConnected
+        dbConnected: finalIsConnected,
+        dbState: finalDbState,
+        environment: process.env.NODE_ENV
       }
     });
   } catch (error) {
@@ -85,13 +114,18 @@ router.get('/health', validateApiKey, (req, res) => {
       message: error.message,
       stack: error.stack,
       dbState: mongoose.connection.readyState,
-      environment: process.env.NODE_ENV
+      environment: process.env.NODE_ENV,
+      timestamp: new Date().toISOString()
     });
     
-    res.status(500).json({ 
+    res.status(503).json({ 
       success: false, 
-      error: 'Database connection check failed',
-      status: 'error'
+      error: 'Service unavailable - Database connection issues',
+      status: 'error',
+      metrics: {
+        dbState: mongoose.connection.readyState,
+        environment: process.env.NODE_ENV
+      }
     });
   }
 });
