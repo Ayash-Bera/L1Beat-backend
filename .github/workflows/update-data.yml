@@ -19,14 +19,33 @@ jobs:
       - name: Test Connection
         run: |
           echo "Testing API connection..."
-          response=$(curl -s -X GET \
+          # Store raw response for debugging
+          raw_response=$(curl -s -X GET \
             -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
             "${{ env.API_BASE_URL }}/test")
           
-          echo "Response status: $(echo $response | jq -r '.success')"
+          echo "Raw API Response:"
+          echo "$raw_response"
           
-          if [ "$(echo $response | jq -r '.success')" != "true" ]; then
-            echo "API test failed"
+          # Check if response is empty
+          if [ -z "$raw_response" ]; then
+            echo "Error: Empty response from API"
+            exit 1
+          fi
+          
+          # Validate JSON and check success status
+          if echo "$raw_response" | jq -e . >/dev/null 2>&1; then
+            success=$(echo "$raw_response" | jq -r '.success')
+            echo "Success status: $success"
+            
+            if [ "$success" = "true" ]; then
+              echo "API test successful"
+            else
+              echo "API test failed: success=false"
+              exit 1
+            fi
+          else
+            echo "Error: Invalid JSON response"
             exit 1
           fi
 
@@ -34,36 +53,63 @@ jobs:
         if: success()
         run: |
           echo "Triggering batch update..."
-          response=$(curl -s -X POST \
+          raw_response=$(curl -s -X POST \
             -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
             -H "Content-Type: application/json" \
             "${{ env.API_BASE_URL }}/update/batch")
           
-          if [ "$(echo $response | jq -r '.success')" != "true" ]; then
-            echo "Update trigger failed"
+          echo "Raw Update Response:"
+          echo "$raw_response"
+          
+          if [ -z "$raw_response" ]; then
+            echo "Error: Empty response from update endpoint"
             exit 1
           fi
           
-          echo "Update process started. Waiting 45 seconds..."
+          if echo "$raw_response" | jq -e . >/dev/null 2>&1; then
+            if [ "$(echo "$raw_response" | jq -r '.success')" = "true" ]; then
+              echo "Update process started successfully"
+            else
+              echo "Update trigger failed"
+              exit 1
+            fi
+          else
+            echo "Error: Invalid JSON response from update endpoint"
+            exit 1
+          fi
+          
+          echo "Waiting 45 seconds for processing..."
           sleep 45
 
       - name: Verify Update
         if: success()
         run: |
           echo "Checking health status..."
-          response=$(curl -s -X GET \
+          raw_response=$(curl -s -X GET \
             -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
             "${{ env.API_BASE_URL }}/health")
           
-          if [ "$(echo $response | jq -r '.success')" != "true" ]; then
-            echo "Health check failed"
-            echo "Response: $response"
+          echo "Raw Health Response:"
+          echo "$raw_response"
+          
+          if [ -z "$raw_response" ]; then
+            echo "Error: Empty response from health endpoint"
             exit 1
           fi
           
-          echo "Health check passed"
-          echo "Total chains: $(echo $response | jq -r '.metrics.totalChains')"
-          echo "Stale chains: $(echo $response | jq -r '.metrics.staleChains')"
+          if echo "$raw_response" | jq -e . >/dev/null 2>&1; then
+            if [ "$(echo "$raw_response" | jq -r '.success')" = "true" ]; then
+              echo "Health check passed"
+              echo "Total chains: $(echo "$raw_response" | jq -r '.metrics.totalChains')"
+              echo "Stale chains: $(echo "$raw_response" | jq -r '.metrics.staleChains')"
+            else
+              echo "Health check failed"
+              exit 1
+            fi
+          else
+            echo "Error: Invalid JSON response from health endpoint"
+            exit 1
+          fi
 
       - name: Create Issue on Failure
         if: failure()
