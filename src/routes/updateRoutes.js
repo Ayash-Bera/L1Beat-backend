@@ -4,6 +4,7 @@ const Chain = require('../models/chain');
 const tpsService = require('../services/tpsService');
 const tvlService = require('../services/tvlService');
 const fetchAndUpdateData = require('../utils/fetchGlacierData');
+const mongoose = require('mongoose');
 
 // Middleware to check API key
 const validateApiKey = (req, res, next) => {
@@ -60,22 +61,23 @@ router.post('/update/tvl', validateApiKey, async (req, res) => {
 // Health check endpoint
 router.get('/health', validateApiKey, async (req, res) => {
   try {
-    const chains = await Chain.find().select('chainId tps');
-    const currentTime = Math.floor(Date.now() / 1000);
+    // Simple DB connection check
+    const isConnected = mongoose.connection.readyState === 1;
     
-    const staleChains = chains.filter(chain => {
-      const dataAge = currentTime - (chain.tps?.timestamp || 0);
-      return dataAge > 24 * 3600; // More than 24 hours old
-    });
+    if (!isConnected) {
+      throw new Error('Database not connected');
+    }
 
-    // Return a simpler response format
+    // Quick count of chains instead of fetching all data
+    const chainCount = await Chain.countDocuments();
+
     res.json({
       success: true,
       status: 'ok',
       timestamp: new Date().toISOString(),
       metrics: {
-        totalChains: chains.length,
-        staleChains: staleChains.length
+        totalChains: chainCount,
+        dbConnected: isConnected
       }
     });
   } catch (error) {

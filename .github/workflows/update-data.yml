@@ -101,13 +101,15 @@ jobs:
             if [ "$(echo "$raw_response" | jq -r '.success')" = "true" ]; then
               echo "Health check passed"
               echo "Total chains: $(echo "$raw_response" | jq -r '.metrics.totalChains')"
-              echo "Stale chains: $(echo "$raw_response" | jq -r '.metrics.staleChains')"
+              echo "DB Connected: $(echo "$raw_response" | jq -r '.metrics.dbConnected')"
             else
               echo "Health check failed"
+              echo "Error: $(echo "$raw_response" | jq -r '.error')"
               exit 1
             fi
           else
             echo "Error: Invalid JSON response from health endpoint"
+            echo "Raw response: $raw_response"
             exit 1
           fi
 
