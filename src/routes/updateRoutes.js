@@ -90,20 +90,20 @@ router.get('/health', validateApiKey, async (req, res) => {
   }
 });
 
-// Test endpoint
-router.get('/test', validateApiKey, async (req, res) => {
+// Test endpoint - make it super lightweight
+router.get('/test', validateApiKey, (req, res) => {
   try {
-    // Simple response without any async operations
-    return res.status(200).json({
+    // Remove async/await since we don't need it
+    // Return minimal response
+    res.status(200).json({
       success: true,
-      message: 'Test endpoint working',
-      timestamp: new Date().toISOString()
+      timestamp: Date.now()
     });
   } catch (error) {
     console.error('Test endpoint error:', error);
-    return res.status(500).json({ 
+    res.status(500).json({ 
       success: false, 
-      error: error.message || 'Internal server error'
+      error: 'Internal server error'
     });
   }
 });
