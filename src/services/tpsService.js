@@ -8,6 +8,10 @@ class TpsService {
       try {
         console.log(`[TPS Update] Attempt ${attempt}/${retryCount} for chain ${chainId}`);
         
+        // Add timestamp to log for debugging
+        const currentTime = Math.floor(Date.now() / 1000);
+        console.log(`Current timestamp: ${currentTime} (${new Date(currentTime * 1000).toISOString()})`);
+        
         const response = await axios.get(`https://popsicle-api.avax.network/v1/avg_tps/${chainId}`, {
           timeout: 15000,
           headers: {
@@ -22,7 +26,17 @@ class TpsService {
 
         const tpsData = response.data.results;
         
-        // Store all valid TPS data points without filtering by date
+        // Log the latest TPS data point
+        if (tpsData.length > 0) {
+          const latest = tpsData[0];
+          console.log(`Latest TPS data for chain ${chainId}:`, {
+            timestamp: latest.timestamp,
+            date: new Date(latest.timestamp * 1000).toISOString(),
+            value: latest.value
+          });
+        }
+
+        // Store all valid TPS data points
         const result = await TPS.bulkWrite(
           tpsData.map(item => ({
             updateOne: {
@@ -39,6 +53,18 @@ class TpsService {
               upsert: true
             }
           }))
+        );
+
+        // Update the chain's latest TPS
+        await Chain.updateOne(
+          { chainId },
+          { 
+            $set: {
+              'tps.value': parseFloat(tpsData[0]?.value || 0),
+              'tps.timestamp': Number(tpsData[0]?.timestamp || 0),
+              'tps.lastUpdated': new Date()
+            }
+          }
         );
 
         console.log(`TPS Update completed for chain ${chainId}:`, {
