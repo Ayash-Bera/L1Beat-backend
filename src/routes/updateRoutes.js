@@ -59,32 +59,38 @@ router.post('/update/tvl', validateApiKey, async (req, res) => {
 });
 
 // Health check endpoint
-router.get('/health', validateApiKey, async (req, res) => {
+router.get('/health', validateApiKey, (req, res) => {
   try {
-    // Simple DB connection check
+    // Remove async operations completely
+    // Just check DB connection state
     const isConnected = mongoose.connection.readyState === 1;
     
-    if (!isConnected) {
-      throw new Error('Database not connected');
-    }
-
-    // Quick count of chains instead of fetching all data
-    const chainCount = await Chain.countDocuments();
+    console.log('Health check - DB connection state:', {
+      readyState: mongoose.connection.readyState,
+      isConnected,
+      host: mongoose.connection.host,
+      environment: process.env.NODE_ENV
+    });
 
     res.json({
       success: true,
       status: 'ok',
-      timestamp: new Date().toISOString(),
+      timestamp: Date.now(),
       metrics: {
-        totalChains: chainCount,
         dbConnected: isConnected
       }
     });
   } catch (error) {
-    console.error('Health check error:', error);
+    console.error('Health check error:', {
+      message: error.message,
+      stack: error.stack,
+      dbState: mongoose.connection.readyState,
+      environment: process.env.NODE_ENV
+    });
+    
     res.status(500).json({ 
       success: false, 
-      error: error.message,
+      error: 'Database connection check failed',
       status: 'error'
     });
   }

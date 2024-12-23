@@ -117,7 +117,6 @@ jobs:
           if echo "$raw_response" | jq -e . >/dev/null 2>&1; then
             if [ "$(echo "$raw_response" | jq -r '.success')" = "true" ]; then
               echo "Health check passed"
-              echo "Total chains: $(echo "$raw_response" | jq -r '.metrics.totalChains')"
               echo "DB Connected: $(echo "$raw_response" | jq -r '.metrics.dbConnected')"
             else
               echo "Health check failed"
@@ -127,6 +126,7 @@ jobs:
           else
             echo "Error: Invalid JSON response from health endpoint"
             echo "Raw response: $raw_response"
+            curl -v -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" "${{ env.API_BASE_URL }}/health"
             exit 1
           fi
 
