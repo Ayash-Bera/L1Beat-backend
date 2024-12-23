@@ -68,30 +68,41 @@ router.get('/health', validateApiKey, async (req, res) => {
       return dataAge > 24 * 3600; // More than 24 hours old
     });
 
+    // Return a simpler response format
     res.json({
       success: true,
+      status: 'ok',
       timestamp: new Date().toISOString(),
-      totalChains: chains.length,
-      staleChains: staleChains.map(c => ({
-        chainId: c.chainId,
-        lastUpdate: new Date(c.tps?.timestamp * 1000).toISOString()
-      }))
+      metrics: {
+        totalChains: chains.length,
+        staleChains: staleChains.length
+      }
     });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('Health check error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message,
+      status: 'error'
+    });
   }
 });
 
-// Add this test endpoint
+// Test endpoint
 router.get('/test', validateApiKey, async (req, res) => {
   try {
-    res.json({
+    // Simple response without any async operations
+    return res.status(200).json({
       success: true,
       message: 'Test endpoint working',
       timestamp: new Date().toISOString()
     });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('Test endpoint error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      error: error.message || 'Internal server error'
+    });
   }
 });
 

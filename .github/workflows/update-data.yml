@@ -12,76 +12,75 @@ permissions:
 jobs:
   update-data:
     runs-on: ubuntu-latest
+    env:
+      API_BASE_URL: https://backend-phi-green.vercel.app/api
+    
     steps:
       - name: Test Connection
         run: |
           echo "Testing API connection..."
-          response=$(curl -v -s \
+          response=$(curl -s -X GET \
             -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
-            "https://backend-phi-green.vercel.app/api/test")
-          echo "Raw response: $response"
+            "${{ env.API_BASE_URL }}/test")
           
-          # Only try to parse if we got a response
-          if [ ! -z "$response" ]; then
-            if echo "$response" | jq -e . >/dev/null 2>&1; then
-              if echo "$response" | jq -e '.success == true' >/dev/null; then
-                echo "API test passed"
-              else
-                echo "API test failed: Response indicates failure"
-                exit 1
-              fi
-            else
-              echo "API test failed: Invalid JSON response"
-              exit 1
-            fi
-          else
-            echo "API test failed: Empty response"
+          echo "Response status: $(echo $response | jq -r '.success')"
+          
+          if [ "$(echo $response | jq -r '.success')" != "true" ]; then
+            echo "API test failed"
             exit 1
           fi
 
-      - name: Update All Data
-        id: update
+      - name: Trigger Update
         if: success()
         run: |
-          echo "Attempting first update..."
+          echo "Triggering batch update..."
           response=$(curl -s -X POST \
             -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
             -H "Content-Type: application/json" \
-            "https://backend-phi-green.vercel.app/api/update/batch")
+            "${{ env.API_BASE_URL }}/update/batch")
           
-          echo "Raw update response: $response"
-          
-          if [ ! -z "$response" ] && echo "$response" | jq -e '.success == true' >/dev/null; then
-            echo "Update process started successfully"
-            echo "Waiting for 30 seconds to allow processing..."
-            sleep 30
-          else
-            echo "Update initiation failed: $response"
+          if [ "$(echo $response | jq -r '.success')" != "true" ]; then
+            echo "Update trigger failed"
             exit 1
           fi
           
-          # Check the health endpoint
-          health_response=$(curl -s \
-            -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
-            "https://backend-phi-green.vercel.app/api/health")
-            
-          echo "Raw health response: $health_response"
-          
-          if [ ! -z "$health_response" ] && echo "$health_response" | jq -e '.success == true' >/dev/null; then
-            echo "Health check passed"
-          else
-            echo "Health check failed: $health_response"
-            exit 1
-          fi
+          echo "Update process started. Waiting 45 seconds..."
+          sleep 45
 
-      - name: Notify on Failure
+      - name: Verify Update
+        if: success()
+        run: |
+          echo "Checking health status..."
+          response=$(curl -s -X GET \
+            -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
+            "${{ env.API_BASE_URL }}/health")
+          
+          if [ "$(echo $response | jq -r '.success')" != "true" ]; then
+            echo "Health check failed"
+            echo "Response: $response"
+            exit 1
+          fi
+          
+          echo "Health check passed"
+          echo "Total chains: $(echo $response | jq -r '.metrics.totalChains')"
+          echo "Stale chains: $(echo $response | jq -r '.metrics.staleChains')"
+
+      - name: Create Issue on Failure
         if: failure()
         uses: actions/github-script@v6
         with:
           script: |
-            github.rest.issues.create({
+            const issueBody = `
+            Data update job failed at ${new Date().toISOString()}
+            
+            Please check the GitHub Actions logs for more details:
+            ${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}
+            `;
+            
+            await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: 'Data Update Failed',
-              body: `Update job failed at ${new Date().toISOString()}\nPlease check the GitHub Actions logs.`
-            })
+              title: '🚨 Data Update Failed',
+              body: issueBody,
+              labels: ['bug', 'automated']
+            });
