@@ -101,42 +101,64 @@ jobs:
       - name: Verify Update
         if: success()
         run: |
-          echo "Checking health status..."
-          raw_response=$(curl -s -X GET \
-            -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
-            "${{ env.API_BASE_URL }}/health")
-          
-          echo "Raw Health Response:"
-          echo "$raw_response"
-          
-          if [ -z "$raw_response" ]; then
-            echo "Error: Empty response from health endpoint"
-            exit 1
-          fi
-          
-          if echo "$raw_response" | jq -e . >/dev/null 2>&1; then
-            success=$(echo "$raw_response" | jq -r '.success')
-            status=$(echo "$raw_response" | jq -r '.status')
-            dbState=$(echo "$raw_response" | jq -r '.metrics.dbState')
+          for i in {1..3}; do
+            echo "Checking health status (attempt $i/3)..."
+            raw_response=$(curl -s -X GET \
+              -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" \
+              "${{ env.API_BASE_URL }}/health")
             
-            echo "Health check results:"
-            echo "Success: $success"
-            echo "Status: $status"
-            echo "DB State: $dbState"
+            echo "Raw Health Response:"
+            echo "$raw_response"
             
-            if [ "$success" = "true" ] && [ "$status" != "error" ]; then
-              echo "Health check passed"
-            else
-              echo "Health check failed"
-              echo "Error: $(echo "$raw_response" | jq -r '.error // "Unknown error"')"
+            if [ -z "$raw_response" ]; then
+              echo "Error: Empty response from health endpoint"
+              if [ $i -lt 3 ]; then
+                echo "Retrying in 15 seconds..."
+                sleep 15
+                continue
+              fi
               exit 1
             fi
-          else
-            echo "Error: Invalid JSON response from health endpoint"
-            echo "Raw response: $raw_response"
-            curl -v -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" "${{ env.API_BASE_URL }}/health"
-            exit 1
-          fi
+            
+            if echo "$raw_response" | jq -e . >/dev/null 2>&1; then
+              success=$(echo "$raw_response" | jq -r '.success')
+              status=$(echo "$raw_response" | jq -r '.status')
+              dbState=$(echo "$raw_response" | jq -r '.metrics.dbState')
+              
+              echo "Health check results:"
+              echo "Success: $success"
+              echo "Status: $status"
+              echo "DB State: $dbState"
+              
+              # Accept both 'ok' and 'degraded' states if success is true
+              if [ "$success" = "true" ] && { [ "$status" = "ok" ] || [ "$status" = "degraded" ]; }; then
+                echo "Health check passed (Status: $status)"
+                if [ "$status" = "degraded" ]; then
+                  echo "Warning: Service is in degraded state but still functional"
+                fi
+                break
+              else
+                echo "Health check failed"
+                echo "Error: $(echo "$raw_response" | jq -r '.error // "Unknown error"')"
+                if [ $i -lt 3 ]; then
+                  echo "Retrying in 15 seconds..."
+                  sleep 15
+                  continue
+                fi
+                exit 1
+              fi
+            else
+              echo "Error: Invalid JSON response from health endpoint"
+              echo "Raw response: $raw_response"
+              if [ $i -lt 3 ]; then
+                echo "Retrying in 15 seconds..."
+                sleep 15
+                continue
+              fi
+              curl -v -H "x-api-key: ${{ secrets.UPDATE_API_KEY }}" "${{ env.API_BASE_URL }}/health"
+              exit 1
+            fi
+          done
 
       - name: Create Issue on Failure
         if: failure()
