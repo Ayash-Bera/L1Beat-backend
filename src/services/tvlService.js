@@ -115,21 +115,24 @@ class TvlService {
       console.log(`Fetching TVL history for last ${days} days`);
       const cutoffDate = Math.floor(Date.now() / 1000) - (days * 24 * 60 * 60);
       
-      // Always try to update data before returning
-      await this.updateTvlData().catch(error => {
-        console.error('Failed to update TVL data:', error);
-      });
-      
       const data = await TVL.find({ date: { $gte: cutoffDate } })
         .sort({ date: 1 })
         .select('-_id date tvl')
         .lean();
       
       console.log(`Found ${data.length} TVL records in database`);
-      return data;
+
+      // Return with success wrapper as expected by frontend
+      return {
+        success: true,
+        data: data.map(item => ({
+          date: item.date,
+          tvl: parseFloat(item.tvl).toFixed(2)
+        }))
+      };
     } catch (error) {
       console.error('Error in getTvlHistory:', error);
-      throw new Error(`Error fetching TVL history: ${error.message}`);
+      throw new Error('Failed to fetch TVL data');
     }
   }
 }

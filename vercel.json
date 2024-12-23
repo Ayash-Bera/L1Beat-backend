@@ -5,8 +5,7 @@
       "src": "src/app.js",
       "use": "@vercel/node",
       "config": {
-        "maxDuration": 10,
-        "memory": 3008
+        "maxDuration": 30
       }
     }
   ],
@@ -30,7 +29,15 @@
         },
         {
           "key": "Access-Control-Allow-Headers",
-          "value": "X-API-Key, Content-Type"
+          "value": "Content-Type, Authorization, X-API-Key, X-Requested-With, Accept, Origin"
+        },
+        {
+          "key": "Access-Control-Allow-Credentials",
+          "value": "true"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=60, stale-while-revalidate=300"
         }
       ]
     }

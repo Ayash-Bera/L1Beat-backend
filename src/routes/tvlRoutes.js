@@ -4,7 +4,19 @@ const tvlController = require('../controllers/tvlController');
 const tvlService = require('../services/tvlService');
 const TVL = require('../models/tvl');
 
-router.get('/tvl/history', tvlController.getTvlHistory);
+router.get('/tvl/history', async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 30;
+    const data = await tvlService.getTvlHistory(days);
+    res.json(data);  // Return array directly
+  } catch (error) {
+    console.error('TVL History Error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch TVL data'
+    });
+  }
+});
 
 // Simple version without API key
 if (process.env.NODE_ENV === 'development') {

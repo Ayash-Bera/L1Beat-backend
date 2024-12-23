@@ -27,15 +27,18 @@ console.log('MongoDB URI:', process.env.NODE_ENV === 'production'
 // Environment-specific configurations
 const isDevelopment = process.env.NODE_ENV === 'development';
 
-// CORS configuration with environment-specific settings
-app.use(cors({
-  origin: isDevelopment 
-    ? '*' 
-    : ['https://l1beat.io', 'https://www.l1beat.io', 'http://localhost:4173', 'http://localhost:5173'],
-  credentials: true,
+// Update CORS configuration
+const corsOptions = {
+  origin: process.env.NODE_ENV === 'production'
+    ? ['https://l1beat.io', 'https://www.l1beat.io', 'https://l1beat-io.vercel.app']
+    : '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
-}));
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-Requested-With', 'Accept', 'Origin'],
+  credentials: true,
+  maxAge: 86400 // 24 hours
+};
+
+app.use(cors(corsOptions));
 
 app.use(express.json());
 
@@ -132,6 +135,24 @@ app.use((err, req, res, next) => {
   });
 });
 
+// Add error handling middleware specifically for chain routes
+app.use('/api/chains', async (err, req, res, next) => {
+  console.error('Chain route error:', {
+    path: req.path,
+    method: req.method,
+    error: err.message,
+    stack: err.stack,
+    timestamp: new Date().toISOString()
+  });
+
+  res.status(500).json({
+    success: false,
+    error: process.env.NODE_ENV === 'production' 
+      ? 'Internal server error' 
+      : err.message
+  });
+});
+
 // Add catch-all route for undefined routes
 app.use('*', (req, res) => {
   res.status(404).json({
@@ -141,8 +162,8 @@ app.use('*', (req, res) => {
   });
 });
 
-// Add OPTIONS handling for preflight requests
-app.options('*', cors());
+// Ensure OPTIONS requests are handled properly
+app.options('*', cors(corsOptions));
 
 const PORT = process.env.PORT || 5001;
 
