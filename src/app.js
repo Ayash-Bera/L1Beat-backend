@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const cron = require('node-cron');
 const connectDB = require('./config/db');
 const chainRoutes = require('./routes/chainRoutes');
 const fetchAndUpdateData = require('./utils/fetchGlacierData');
@@ -12,8 +13,6 @@ const Chain = require('./models/chain');
 const chainService = require('./services/chainService');
 const tpsRoutes = require('./routes/tpsRoutes');
 const tpsService = require('./services/tpsService');
-const updateRoutes = require('./routes/updateRoutes');
-const mongoose = require('mongoose');
 
 const app = express();
 
@@ -27,43 +26,91 @@ console.log('MongoDB URI:', process.env.NODE_ENV === 'production'
 // Environment-specific configurations
 const isDevelopment = process.env.NODE_ENV === 'development';
 
-// Update CORS configuration
-const corsOptions = {
-  origin: process.env.NODE_ENV === 'production'
-    ? ['https://l1beat.io', 'https://www.l1beat.io', 'https://l1beat-io.vercel.app']
-    : '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-Requested-With', 'Accept', 'Origin'],
+// CORS configuration with environment-specific settings
+app.use(cors({
+  origin: isDevelopment 
+    ? '*' 
+    : ['https://l1beat.io', 'https://www.l1beat.io', 'http://localhost:4173', 'http://localhost:5173'],
   credentials: true,
-  maxAge: 86400 // 24 hours
-};
-
-app.use(cors(corsOptions));
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
+}));
 
 app.use(express.json());
 
-// Add API key middleware
-const validateApiKey = (req, res, next) => {
-  const apiKey = req.headers['x-api-key'];
-  const validApiKey = process.env.UPDATE_API_KEY;
-
-  if (!apiKey || apiKey !== validApiKey) {
-    return res.status(401).json({
-      success: false,
-      error: "Unauthorized"
-    });
-  }
-  next();
-};
-
 // Single initialization point for data updates
 const initializeDataUpdates = async () => {
-  console.log(`[${process.env.NODE_ENV}] Initializing data...`);
+  console.log(`[${process.env.NODE_ENV}] Initializing data updates at ${new Date().toISOString()}`);
+  
   try {
-    await fetchAndUpdateData();
+    // First update chains
+    console.log('Fetching initial chain data...');
+    const chains = await chainDataService.fetchChainData();
+    console.log(`Fetched ${chains.length} chains from Glacier API`);
+
+    if (chains && chains.length > 0) {
+      for (const chain of chains) {
+        await chainService.updateChain(chain);
+        // Add initial TPS update for each chain
+        await tpsService.updateTpsData(chain.chainId);
+      }
+      console.log(`Updated ${chains.length} chains in database`);
+      
+      // Verify chains were saved
+      const savedChains = await Chain.find();
+      console.log('Chains in database:', {
+        count: savedChains.length,
+        chainIds: savedChains.map(c => c.chainId)
+      });
+    } else {
+      console.error('No chains fetched from Glacier API');
+    }
+
+    // Then update TVL
+    console.log('Updating TVL data...');
+    await tvlService.updateTvlData();
+    
+    // Verify TVL update
+    const lastTVL = await TVL.findOne().sort({ date: -1 });
+    console.log('TVL Update Result:', {
+      lastUpdate: lastTVL?.date ? new Date(lastTVL.date * 1000).toISOString() : 'none',
+      tvl: lastTVL?.tvl,
+      timestamp: new Date().toISOString()
+    });
+
   } catch (error) {
     console.error('Initialization error:', error);
   }
+
+  // Set up scheduled updates for both production and development
+  console.log('Setting up update schedules...');
+  
+  // TVL updates every 30 minutes
+  cron.schedule('*/30 * * * *', async () => {
+    try {
+      console.log(`[CRON] Starting scheduled TVL update at ${new Date().toISOString()}`);
+      await tvlService.updateTvlData();
+      console.log('[CRON] TVL update completed');
+    } catch (error) {
+      console.error('[CRON] TVL update failed:', error);
+    }
+  });
+
+  // Chain and TPS updates every hour
+  cron.schedule('0 * * * *', async () => {
+    try {
+      console.log(`[CRON] Starting scheduled chain update at ${new Date().toISOString()}`);
+      const chains = await chainDataService.fetchChainData();
+      for (const chain of chains) {
+        await chainService.updateChain(chain);
+        // Add TPS update for each chain
+        await tpsService.updateTpsData(chain.chainId);
+      }
+      console.log(`[CRON] Updated ${chains.length} chains with TPS data`);
+    } catch (error) {
+      console.error('[CRON] Chain/TPS update failed:', error);
+    }
+  });
 };
 
 // Call initialization after DB connection
@@ -75,32 +122,6 @@ connectDB().then(() => {
 app.use('/api', chainRoutes);
 app.use('/api', tvlRoutes);
 app.use('/api', tpsRoutes);
-app.use('/api', updateRoutes);
-
-// Add test endpoint
-app.get('/api/test', validateApiKey, (req, res) => {
-  try {
-    console.log('Test endpoint called with API key:', !!req.headers['x-api-key']);
-    
-    // Test database connection
-    const dbStatus = mongoose.connection.readyState;
-    console.log('Database connection state:', dbStatus);
-    
-    res.json({
-      success: true,
-      message: "API is working correctly",
-      timestamp: new Date().toISOString(),
-      dbStatus: dbStatus === 1 ? 'connected' : 'disconnected'
-    });
-  } catch (error) {
-    console.error('Test endpoint error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-});
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -117,39 +138,13 @@ if (isDevelopment) {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Error details:', {
-    message: err.message,
-    stack: err.stack,
-    path: req.path,
-    method: req.method,
-    headers: req.headers,
-    timestamp: new Date().toISOString()
-  });
+  console.error('Error:', err);
   
+  // Send proper JSON response
   res.status(500).json({
-    success: false,
     error: 'Internal Server Error',
     message: err.message,
-    path: req.path,
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Add error handling middleware specifically for chain routes
-app.use('/api/chains', async (err, req, res, next) => {
-  console.error('Chain route error:', {
-    path: req.path,
-    method: req.method,
-    error: err.message,
-    stack: err.stack,
-    timestamp: new Date().toISOString()
-  });
-
-  res.status(500).json({
-    success: false,
-    error: process.env.NODE_ENV === 'production' 
-      ? 'Internal server error' 
-      : err.message
+    path: req.path
   });
 });
 
@@ -162,8 +157,8 @@ app.use('*', (req, res) => {
   });
 });
 
-// Ensure OPTIONS requests are handled properly
-app.options('*', cors(corsOptions));
+// Add OPTIONS handling for preflight requests
+app.options('*', cors());
 
 const PORT = process.env.PORT || 5001;
 
@@ -192,12 +187,3 @@ if (process.env.NODE_ENV !== 'production') {
         console.error('Production server error:', error);
     });
 }
-
-// Add error event handler for uncaught exceptions
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-});

@@ -42,37 +42,15 @@ const fetchAndUpdateData = async () => {
             console.warn('No chains fetched from API, skipping database update');
         }
 
-        // Update TPS data for each chain with better error handling
-        console.log('Starting TPS updates for all chains...');
-        const tpsUpdateResults = await Promise.allSettled(
-            chains.map(async (chain) => {
-                try {
-                    await tpsService.updateTpsData(chain.chainId);
-                    return {
-                        chainId: chain.chainId,
-                        status: 'success'
-                    };
-                } catch (error) {
-                    console.error(`Failed to update TPS for chain ${chain.chainId}:`, error);
-                    return {
-                        chainId: chain.chainId,
-                        status: 'failed',
-                        error: error.message
-                    };
-                }
-            })
-        );
-
-        // Log TPS update results
-        const tpsSuccessCount = tpsUpdateResults.filter(r => r.status === 'fulfilled').length;
-        const tpsFailedCount = tpsUpdateResults.filter(r => r.status === 'rejected').length;
-
-        console.log('TPS update summary:', {
-            total: chains.length,
-            success: tpsSuccessCount,
-            failed: tpsFailedCount,
-            timestamp: new Date().toISOString()
-        });
+        // Update TPS data for each chain
+        for (const chain of chains) {
+            try {
+                await tpsService.updateTpsData(chain.chainId);
+                console.log(`Updated TPS data for chain ${chain.chainId}`);
+            } catch (error) {
+                console.error(`Failed to update TPS data for chain ${chain.chainId}:`, error);
+            }
+        }
 
         // Update TVL data independently
         await tvlService.updateTvlData();
