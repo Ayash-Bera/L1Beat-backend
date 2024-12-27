@@ -26,7 +26,6 @@ const chainSchema = new mongoose.Schema({
     chainLogoUri: String,
     private: Boolean,
     enabledFeatures: [String],
-    validatorCount: Number,
     validators: [{
         nodeId: String,
         txHash: String,

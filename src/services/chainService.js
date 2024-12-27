@@ -65,9 +65,6 @@ class ChainService {
 
             console.log(`Updating chain ${chainId} (subnet: ${chainData.subnetId})`);
             
-            const validatorCount = await this.updateValidatorCount(chainData.subnetId);
-            console.log(`Validator count from metrics API: ${validatorCount}`);
-            
             const validators = await this.fetchValidators(chainData.subnetId);
             console.log(`Fetched ${validators.length} validators for chain ${chainId}`);
             
@@ -75,7 +72,6 @@ class ChainService {
                 { chainId },
                 { 
                     ...chainData,
-                    validatorCount,
                     validators,
                     lastUpdated: new Date()
                 },
@@ -91,27 +87,6 @@ class ChainService {
         } catch (error) {
             console.error(`Error updating chain ${chainData.chainId}:`, error);
             throw error;
-        }
-    }
-
-    async updateValidatorCount(subnetId) {
-        try {
-            if (!subnetId) return null;
-            
-            const response = await axios.get(
-                `https://metrics.avax.network/v2/networks/mainnet/metrics/validatorCount?subnetId=${subnetId}`
-            );
-            
-            // Check if we have data and it has the expected structure
-            if (response.data?.results && Array.isArray(response.data.results) && response.data.results.length > 0) {
-                // Get the most recent validator count (first item in the array)
-                return response.data.results[0].value || null;
-            }
-            
-            return null;
-        } catch (error) {
-            console.error(`Error fetching validator count for subnet ${subnetId}:`, error.message);
-            return null;
         }
     }
 
