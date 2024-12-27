@@ -56,6 +56,12 @@ class ChainService {
             const chainId = chainData.chainId;
             const now = Date.now();
             
+            console.log(`Chain update attempt for ${chainId}:`, {
+                environment: process.env.NODE_ENV,
+                timestamp: new Date().toISOString(),
+                hasSubnetId: !!chainData.subnetId
+            });
+
             // Check if chain was recently updated
             const lastUpdate = this.lastUpdated.get(chainId);
             if (lastUpdate && (now - lastUpdate) < this.updateInterval) {
@@ -63,11 +69,15 @@ class ChainService {
                 return null;
             }
 
-            console.log(`Updating chain ${chainId} (subnet: ${chainData.subnetId})`);
-            
             const validators = await this.fetchValidators(chainData.subnetId);
-            console.log(`Fetched ${validators.length} validators for chain ${chainId}`);
             
+            console.log(`Chain ${chainId} update details:`, {
+                validatorCount: validators.length,
+                environment: process.env.NODE_ENV,
+                subnetId: chainData.subnetId,
+                timestamp: new Date().toISOString()
+            });
+
             const updatedChain = await Chain.findOneAndUpdate(
                 { chainId },
                 { 
