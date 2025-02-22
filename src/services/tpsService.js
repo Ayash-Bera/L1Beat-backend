@@ -6,7 +6,7 @@ class TpsService {
   async updateTpsData(chainId, retryCount = 3) {
     for (let attempt = 1; attempt <= retryCount; attempt++) {
       try {
-        console.log(`[TPS Update] Attempt ${attempt}/${retryCount} for chain ${chainId}`);
+        console.log(`[TPS Update] Starting update for chain ${chainId} (Attempt ${attempt}/${retryCount})`);
         
         const response = await axios.get(`https://popsicle-api.avax.network/v1/avg_tps/${chainId}`, {
           timeout: 15000,
@@ -16,144 +16,99 @@ class TpsService {
           }
         });
 
-        // Log raw response for debugging
-        console.log(`Raw API response for chain ${chainId}:`, {
-          status: response.status,
-          hasData: !!response.data,
-          resultsLength: response.data?.results?.length,
-          sample: response.data?.results?.[0]
+        // Enhanced error logging
+        if (!response.data) {
+          console.warn(`[TPS Update] No data in response for chain ${chainId}`);
+          continue;
+        }
+
+        if (!Array.isArray(response.data.results)) {
+          console.warn(`[TPS Update] Invalid response format for chain ${chainId}:`, response.data);
+          continue;
+        }
+
+        const currentTime = Math.floor(Date.now() / 1000);
+        const thirtyDaysAgo = currentTime - (30 * 24 * 60 * 60);
+
+        // Log raw data before filtering
+        console.log(`[TPS Update] Raw data for chain ${chainId}:`, {
+          resultsCount: response.data.results.length,
+          sampleData: response.data.results[0],
+          environment: process.env.NODE_ENV
         });
 
-        if (!response.data || !Array.isArray(response.data.results)) {
-          console.warn(`No TPS data available for chain ${chainId} - skipping`);
-          return null;
-        }
-
-        const tpsData = response.data.results;
-        if (tpsData.length === 0) {
-          console.warn(`Empty TPS data for chain ${chainId} - skipping`);
-          return null;
-        }
-        
-        // Validate timestamps before processing
-        const validTpsData = tpsData.filter(item => {
-          // Check if timestamp is a valid number and not too far in the past or future
+        // Validate and filter TPS data
+        const validTpsData = response.data.results.filter(item => {
           const timestamp = Number(item.timestamp);
-          if (isNaN(timestamp)) {
-            console.warn(`Invalid timestamp found for chain ${chainId}:`, item);
+          const value = parseFloat(item.value);
+          
+          if (isNaN(timestamp) || isNaN(value)) {
+            console.warn(`[TPS Update] Invalid data point for chain ${chainId}:`, item);
             return false;
           }
           
-          const date = new Date(timestamp * 1000);
-          if (date.toString() === 'Invalid Date') {
-            console.warn(`Invalid date conversion for chain ${chainId}:`, { timestamp, item });
-            return false;
-          }
-          
-          // Reject timestamps more than 30 days in the past or any future timestamps
-          const now = Date.now();
-          const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
-          const isValid = date.getTime() >= thirtyDaysAgo && date.getTime() <= now;
-          
+          const isValid = timestamp >= thirtyDaysAgo && timestamp <= currentTime;
           if (!isValid) {
-            console.warn(`Timestamp out of range for chain ${chainId}:`, {
-              timestamp,
-              date: date.toISOString(),
-              now: new Date(now).toISOString(),
-              thirtyDaysAgo: new Date(thirtyDaysAgo).toISOString()
+            console.warn(`[TPS Update] Out of range timestamp for chain ${chainId}:`, {
+              timestamp: new Date(timestamp * 1000).toISOString(),
+              value
             });
           }
+          
           return isValid;
         });
 
-        if (validTpsData.length === 0) {
-          console.warn(`No valid TPS data found for chain ${chainId} - skipping`);
-          return null;
+        // If we have valid data, proceed with update
+        if (validTpsData.length > 0) {
+          const result = await TPS.bulkWrite(
+            validTpsData.map(item => ({
+              updateOne: {
+                filter: { 
+                  chainId: chainId,
+                  timestamp: Number(item.timestamp)
+                },
+                update: { 
+                  $set: { 
+                    value: parseFloat(item.value),
+                    lastUpdated: new Date() 
+                  }
+                },
+                upsert: true
+              }
+            })),
+            { ordered: false } // Continue processing even if some operations fail
+          );
+
+          console.log(`[TPS Update] Success for chain ${chainId}:`, {
+            validDataPoints: validTpsData.length,
+            matched: result.matchedCount,
+            modified: result.modifiedCount,
+            upserted: result.upsertedCount,
+            environment: process.env.NODE_ENV
+          });
+
+          return result;
         }
 
-        // Now process only valid timestamps
-        const timestamps = validTpsData.map(item => Number(item.timestamp));
-        const mostRecent = Math.max(...timestamps);
-        const oldest = Math.min(...timestamps);
-        
-        console.log(`TPS API Response Analysis for chain ${chainId}:`, {
-          totalRecords: tpsData.length,
-          validRecords: validTpsData.length,
-          oldestRecord: new Date(oldest * 1000).toISOString(),
-          mostRecentRecord: new Date(mostRecent * 1000).toISOString(),
-          currentTime: new Date().toISOString(),
-          dataAge: Math.floor((Date.now()/1000 - mostRecent)/60), // in minutes
-          sampleRecord: validTpsData[0],
-          environment: process.env.NODE_ENV
-        });
-
-        const sevenDaysAgo = Math.floor(Date.now() / 1000) - (7 * 24 * 60 * 60);
-        const recentTpsData = validTpsData.filter(item => Number(item.timestamp) >= sevenDaysAgo);
-
-        // Log what we're actually storing
-        console.log(`Filtered TPS data for chain ${chainId}:`, {
-          originalCount: tpsData.length,
-          validCount: validTpsData.length,
-          filteredCount: recentTpsData.length,
-          oldestKept: recentTpsData.length ? 
-            new Date(Math.min(...recentTpsData.map(d => Number(d.timestamp) * 1000))).toISOString() : null,
-          newestKept: recentTpsData.length ? 
-            new Date(Math.max(...recentTpsData.map(d => Number(d.timestamp) * 1000))).toISOString() : null
-        });
-
-        if (recentTpsData.length === 0) {
-          console.warn(`No recent TPS data available for chain ${chainId}`);
-          return null;
-        }
-
-        const result = await TPS.bulkWrite(
-          recentTpsData.map(item => ({
-            updateOne: {
-              filter: { 
-                chainId: chainId,
-                timestamp: Number(item.timestamp)
-              },
-              update: { 
-                $set: { 
-                  value: parseFloat(item.value),
-                  lastUpdated: new Date() 
-                }
-              },
-              upsert: true
-            }
-          }))
-        );
-
-        console.log(`TPS Update completed for chain ${chainId}:`, {
-          matched: result.matchedCount,
-          modified: result.modifiedCount,
-          upserted: result.upsertedCount,
-          environment: process.env.NODE_ENV
-        });
-
-        return result;
+        console.warn(`[TPS Update] No valid data points for chain ${chainId}`);
+        return null;
 
       } catch (error) {
-        console.error(`TPS Update Error for chain ${chainId} (Attempt ${attempt}/${retryCount}):`, {
+        console.error(`[TPS Update] Error for chain ${chainId} (Attempt ${attempt}/${retryCount}):`, {
           message: error.message,
           status: error.response?.status,
           data: error.response?.data,
-          environment: process.env.NODE_ENV,
-          stack: error.stack
+          stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
 
-        // Don't retry if it's a 404 or other indication that the chain doesn't have TPS data
-        if (error.response?.status === 404 || error.response?.status === 400) {
-          console.warn(`Chain ${chainId} appears to not have TPS data - skipping`);
+        if (attempt === retryCount) {
+          // On final attempt, log but don't throw
+          console.error(`[TPS Update] All attempts failed for chain ${chainId}`);
           return null;
         }
 
-        if (attempt === retryCount) {
-          // Don't throw on final attempt, just return null
-          console.warn(`All attempts failed for chain ${chainId} - skipping`);
-          return null;
-        }
-        await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+        // Wait before retry
+        await new Promise(resolve => setTimeout(resolve, attempt * 2000));
       }
     }
     return null;
@@ -214,25 +169,68 @@ class TpsService {
       const currentTime = Math.floor(Date.now() / 1000);
       const oneDayAgo = currentTime - (24 * 60 * 60);
 
-      console.log('Time boundaries:', {
+      // Add more detailed initial logging
+      console.log('Network TPS calculation - Time boundaries:', {
         currentTime: new Date(currentTime * 1000).toISOString(),
         oneDayAgo: new Date(oneDayAgo * 1000).toISOString(),
-        environment: process.env.NODE_ENV
+        currentTimestamp: currentTime,
+        oneDayAgoTimestamp: oneDayAgo
+      });
+
+      // First get all TPS records for debugging
+      const allTpsRecords = await TPS.find({
+        timestamp: { $gte: oneDayAgo }
+      }).lean();
+
+      console.log('All TPS records in last 24h:', {
+        count: allTpsRecords.length,
+        uniqueChains: [...new Set(allTpsRecords.map(r => r.chainId))].length,
+        timeRange: {
+          oldest: allTpsRecords.length ? new Date(Math.min(...allTpsRecords.map(r => r.timestamp * 1000))).toISOString() : null,
+          newest: allTpsRecords.length ? new Date(Math.max(...allTpsRecords.map(r => r.timestamp * 1000))).toISOString() : null
+        }
       });
 
       const latestTpsPromises = chains.map(chain => 
         TPS.findOne({ 
           chainId: chain.chainId,
-          timestamp: { $gte: oneDayAgo }
+          timestamp: { $gte: oneDayAgo, $lte: currentTime } // Add upper bound
         })
           .sort({ timestamp: -1 })
-          .select('value timestamp')
+          .select('value timestamp chainId')
           .lean()
       );
 
       const tpsResults = await Promise.all(latestTpsPromises);
-      const validResults = tpsResults.filter(result => result !== null);
-      
+      const validResults = tpsResults.filter(result => {
+        if (!result) return false;
+        
+        // Validate the timestamp is reasonable
+        const timestamp = result.timestamp;
+        const isValid = timestamp >= oneDayAgo && timestamp <= currentTime;
+        
+        if (!isValid) {
+          console.warn(`Invalid timestamp for chain ${result.chainId}:`, {
+            timestamp: new Date(timestamp * 1000).toISOString(),
+            value: result.value
+          });
+        }
+        
+        return isValid;
+      });
+
+      // Detailed logging of valid results
+      console.log('Network TPS calculation - Valid Results:', {
+        totalChains: chains.length,
+        validResults: validResults.length,
+        chainDetails: validResults.map(r => ({
+          chainId: r.chainId,
+          tps: r.value,
+          timestamp: new Date(r.timestamp * 1000).toISOString()
+        })),
+        environment: process.env.NODE_ENV
+      });
+
       const timestamps = validResults.map(r => r.timestamp);
       const futureTimestamps = timestamps.filter(t => t > currentTime);
       if (futureTimestamps.length > 0) {
@@ -280,12 +278,8 @@ class TpsService {
         lastUpdate: new Date(latestTimestamp * 1000).toISOString()
       };
     } catch (error) {
-      console.error('Error calculating network TPS:', {
-        message: error.message,
-        stack: error.stack,
-        environment: process.env.NODE_ENV
-      });
-      throw new Error(`Error calculating network TPS: ${error.message}`);
+      console.error('Error calculating network TPS:', error);
+      throw error;
     }
   }
 

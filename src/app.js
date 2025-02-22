@@ -118,6 +118,46 @@ const initializeDataUpdates = async () => {
       console.error('[CRON] Chain/TPS update failed:', error);
     }
   });
+
+  // Check TPS data every 15 minutes
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+        console.log(`[CRON] Starting TPS verification at ${new Date().toISOString()}`);
+        
+        const currentTime = Math.floor(Date.now() / 1000);
+        const oneDayAgo = currentTime - (24 * 60 * 60);
+        
+        // Get chains with missing or old TPS data
+        const chains = await Chain.find().select('chainId').lean();
+        const tpsData = await TPS.find({
+            timestamp: { $gte: oneDayAgo }
+        }).distinct('chainId');
+
+        const chainsNeedingUpdate = chains.filter(chain => 
+            !tpsData.includes(chain.chainId)
+        );
+
+        if (chainsNeedingUpdate.length > 0) {
+            console.log(`[CRON] Found ${chainsNeedingUpdate.length} chains needing TPS update`);
+            
+            // Update chains in batches
+            const BATCH_SIZE = 5;
+            for (let i = 0; i < chainsNeedingUpdate.length; i += BATCH_SIZE) {
+                const batch = chainsNeedingUpdate.slice(i, i + BATCH_SIZE);
+                await Promise.all(
+                    batch.map(chain => tpsService.updateTpsData(chain.chainId))
+                );
+                if (i + BATCH_SIZE < chainsNeedingUpdate.length) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            }
+        }
+
+        console.log(`[CRON] TPS verification complete at ${new Date().toISOString()}`);
+    } catch (error) {
+        console.error('[CRON] TPS verification failed:', error);
+    }
+  });
 };
 
 // Call initialization after DB connection

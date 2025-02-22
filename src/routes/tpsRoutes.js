@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const tpsService = require('../services/tpsService');
+const Chain = require('../models/chain');
+const TPS = require('../models/tps');
 
 // Get TPS history for a chain
 router.get('/chains/:chainId/tps/history', async (req, res) => {
@@ -43,28 +45,6 @@ router.get('/chains/:chainId/tps/latest', async (req, res) => {
   }
 });
 
-// Force update TPS data (development only)
-if (process.env.NODE_ENV === 'development') {
-  router.post('/chains/:chainId/tps/update', async (req, res) => {
-    try {
-      const { chainId } = req.params;
-      await tpsService.updateTpsData(chainId);
-      const latest = await tpsService.getLatestTps(chainId);
-      res.json({
-        success: true,
-        message: 'TPS data updated successfully',
-        latest
-      });
-    } catch (error) {
-      console.error('TPS Update Error:', error);
-      res.status(500).json({ 
-        success: false, 
-        error: error.message 
-      });
-    }
-  });
-}
-
 // Add new route for total network TPS
 router.get('/tps/network/latest', async (req, res) => {
   try {
@@ -101,6 +81,160 @@ router.get('/tps/network/history', async (req, res) => {
       error: error.message 
     });
   }
+});
+
+// Add new health check route
+router.get('/tps/health', async (req, res) => {
+    try {
+        const chains = await Chain.find().select('chainId').lean();
+        const currentTime = Math.floor(Date.now() / 1000);
+        const oneDayAgo = currentTime - (24 * 60 * 60);
+
+        const tps = await TPS.find({
+            timestamp: { $gte: oneDayAgo, $lte: currentTime }
+        })
+            .sort({ timestamp: -1 })
+            .lean();
+
+        const chainTpsCount = await TPS.aggregate([
+            {
+                $match: {
+                    timestamp: { $gte: oneDayAgo, $lte: currentTime }
+                }
+            },
+            {
+                $group: {
+                    _id: '$chainId',
+                    count: { $sum: 1 },
+                    lastUpdate: { $max: '$timestamp' }
+                }
+            }
+        ]);
+            
+        res.json({
+            success: true,
+            stats: {
+                totalChains: chains.length,
+                chainIds: chains.map(c => c.chainId),
+                recentTpsRecords: tps.length,
+                lastTpsUpdate: tps[0] ? new Date(tps[0].timestamp * 1000).toISOString() : null,
+                environment: process.env.NODE_ENV,
+                chainsWithTps: chainTpsCount.length,
+                chainTpsDetails: chainTpsCount.map(c => ({
+                    chainId: c._id,
+                    recordCount: c.count,
+                    lastUpdate: new Date(c.lastUpdate * 1000).toISOString()
+                })),
+                timeRange: {
+                    start: new Date(oneDayAgo * 1000).toISOString(),
+                    end: new Date(currentTime * 1000).toISOString()
+                }
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Add new diagnostic routes
+router.get('/tps/diagnostic', async (req, res) => {
+    try {
+        const currentTime = Math.floor(Date.now() / 1000);
+        const oneDayAgo = currentTime - (24 * 60 * 60);
+        
+        // Get all chains
+        const chains = await Chain.find().select('chainId').lean();
+        
+        // Get TPS data for each chain
+        const chainData = await Promise.all(chains.map(async chain => {
+            const latestTps = await TPS.findOne({ 
+                chainId: chain.chainId,
+                timestamp: { $gte: oneDayAgo, $lte: currentTime }
+            })
+                .sort({ timestamp: -1 })
+                .lean();
+
+            const tpsCount = await TPS.countDocuments({
+                chainId: chain.chainId,
+                timestamp: { $gte: oneDayAgo, $lte: currentTime }
+            });
+
+            return {
+                chainId: chain.chainId,
+                hasData: !!latestTps,
+                recordCount: tpsCount,
+                latestValue: latestTps?.value,
+                latestTimestamp: latestTps ? new Date(latestTps.timestamp * 1000).toISOString() : null
+            };
+        }));
+
+        // Get overall stats
+        const totalRecords = await TPS.countDocuments({
+            timestamp: { $gte: oneDayAgo, $lte: currentTime }
+        });
+
+        const chainsWithData = chainData.filter(c => c.hasData);
+        const totalTps = chainsWithData.reduce((sum, chain) => sum + (chain.latestValue || 0), 0);
+
+        res.json({
+            success: true,
+            environment: process.env.NODE_ENV,
+            timeRange: {
+                start: new Date(oneDayAgo * 1000).toISOString(),
+                end: new Date(currentTime * 1000).toISOString()
+            },
+            summary: {
+                totalChains: chains.length,
+                chainsWithData: chainsWithData.length,
+                totalRecords,
+                calculatedTotalTps: parseFloat(totalTps.toFixed(2))
+            },
+            chainDetails: chainData.sort((a, b) => (b.latestValue || 0) - (a.latestValue || 0))
+        });
+    } catch (error) {
+        console.error('Diagnostic Error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
+// Add a simple status endpoint
+router.get('/tps/status', async (req, res) => {
+    try {
+        const currentTime = Math.floor(Date.now() / 1000);
+        const oneDayAgo = currentTime - (24 * 60 * 60);
+        
+        const tpsCount = await TPS.countDocuments({
+            timestamp: { $gte: oneDayAgo, $lte: currentTime }
+        });
+        
+        const chainCount = await Chain.countDocuments();
+        
+        res.json({
+            success: true,
+            environment: process.env.NODE_ENV,
+            timestamp: new Date().toISOString(),
+            stats: {
+                tpsRecords: tpsCount,
+                chains: chainCount,
+                timeRange: {
+                    start: new Date(oneDayAgo * 1000).toISOString(),
+                    end: new Date(currentTime * 1000).toISOString()
+                }
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
 });
 
 module.exports = router; 
