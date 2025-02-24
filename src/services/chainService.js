@@ -1,7 +1,9 @@
 const Chain = require('../models/chain');
 const axios = require('axios');
-const GLACIER_API_BASE = 'https://glacier-api.avax.network/v1';
+const config = require('../config/config');
 const tpsService = require('../services/tpsService');
+const cacheManager = require('../utils/cacheManager');
+const logger = require('../utils/logger');
 
 class ChainService {
     constructor() {
@@ -12,6 +14,14 @@ class ChainService {
     // Get all chains
     async getAllChains() {
         try {
+            // Check cache first
+            const cacheKey = 'all_chains';
+            const cachedChains = cacheManager.get(cacheKey);
+            if (cachedChains) {
+                logger.debug('Returning cached chains data');
+                return cachedChains;
+            }
+
             const chains = await Chain.find();
             
             // Fetch latest TPS for each chain
@@ -26,13 +36,17 @@ class ChainService {
                         } : null
                     };
                 } catch (error) {
-                    console.error(`Error fetching TPS for chain ${chain.chainId}:`, error);
+                    logger.error(`Error fetching TPS for chain ${chain.chainId}:`, { error: error.message });
                     return chain;
                 }
             }));
             
+            // Cache the result for 5 minutes
+            cacheManager.set(cacheKey, chainsWithTps, config.cache.chains);
+            
             return chainsWithTps;
         } catch (error) {
+            logger.error('Error fetching chains:', { error: error.message });
             throw new Error(`Error fetching chains: ${error.message}`);
         }
     }
@@ -40,12 +54,25 @@ class ChainService {
     // Get chain by ID
     async getChainById(chainId) {
         try {
+            // Check cache first
+            const cacheKey = `chain_${chainId}`;
+            const cachedChain = cacheManager.get(cacheKey);
+            if (cachedChain) {
+                logger.debug(`Returning cached data for chain ${chainId}`);
+                return cachedChain;
+            }
+
             const chain = await Chain.findOne({ chainId });
             if (!chain) {
                 throw new Error('Chain not found');
             }
+            
+            // Cache the result for 5 minutes
+            cacheManager.set(cacheKey, chain, config.cache.chains);
+            
             return chain;
         } catch (error) {
+            logger.error(`Error fetching chain ${chainId}:`, { error: error.message });
             throw new Error(`Error fetching chain: ${error.message}`);
         }
     }
@@ -56,8 +83,8 @@ class ChainService {
             const chainId = chainData.chainId;
             const now = Date.now();
             
-            console.log(`Chain update attempt for ${chainId}:`, {
-                environment: process.env.NODE_ENV,
+            logger.info(`Chain update attempt for ${chainId}:`, {
+                environment: config.env,
                 timestamp: new Date().toISOString(),
                 hasSubnetId: !!chainData.subnetId
             });
@@ -65,15 +92,15 @@ class ChainService {
             // Check if chain was recently updated
             const lastUpdate = this.lastUpdated.get(chainId);
             if (lastUpdate && (now - lastUpdate) < this.updateInterval) {
-                console.log(`Skipping chain ${chainId} - updated ${Math.round((now - lastUpdate)/1000)}s ago`);
+                logger.info(`Skipping chain ${chainId} - updated ${Math.round((now - lastUpdate)/1000)}s ago`);
                 return null;
             }
 
             const validators = await this.fetchValidators(chainData.subnetId);
             
-            console.log(`Chain ${chainId} update details:`, {
+            logger.info(`Chain ${chainId} update details:`, {
                 validatorCount: validators.length,
-                environment: process.env.NODE_ENV,
+                environment: config.env,
                 subnetId: chainData.subnetId,
                 timestamp: new Date().toISOString()
             });
@@ -91,11 +118,15 @@ class ChainService {
             // Update last update time
             this.lastUpdated.set(chainId, now);
             
-            console.log(`Chain ${chainId} updated with ${updatedChain.validators.length} validators`);
+            // Invalidate cache for this chain
+            cacheManager.delete(`chain_${chainId}`);
+            cacheManager.delete('all_chains');
+            
+            logger.info(`Chain ${chainId} updated with ${updatedChain.validators.length} validators`);
             return updatedChain;
             
         } catch (error) {
-            console.error(`Error updating chain ${chainData.chainId}:`, error);
+            logger.error(`Error updating chain ${chainData.chainId}:`, { error: error.message, stack: error.stack });
             throw error;
         }
     }
@@ -108,7 +139,7 @@ class ChainService {
             let nextPageToken = null;
             
             do {
-                const url = new URL('https://glacier-api.avax.network/v1/networks/mainnet/validators');
+                const url = new URL(`${config.api.glacier.baseUrl}/networks/mainnet/validators`);
                 url.searchParams.append('subnetId', subnetId);
                 url.searchParams.append('pageSize', '100');
                 url.searchParams.append('validationStatus', 'active');
@@ -126,14 +157,14 @@ class ChainService {
                 allValidators = [...allValidators, ...data.validators];
                 nextPageToken = data.nextPageToken;
                 
-                console.log(`Fetched ${data.validators.length} validators. Next page token: ${nextPageToken}`);
+                logger.debug(`Fetched ${data.validators.length} validators. Next page token: ${nextPageToken}`);
             } while (nextPageToken);
 
-            console.log(`Total validators fetched: ${allValidators.length}`);
+            logger.info(`Total validators fetched: ${allValidators.length}`);
             return allValidators;
             
         } catch (error) {
-            console.error(`Error fetching validators for subnet ${subnetId}:`, error);
+            logger.error(`Error fetching validators for subnet ${subnetId}:`, { error: error.message });
             return [];
         }
     }
@@ -141,7 +172,7 @@ class ChainService {
     // Clear update tracking (useful for testing or manual resets)
     clearUpdateTracking() {
         this.lastUpdated.clear();
-        console.log('Cleared all chain update tracking');
+        logger.info('Cleared all chain update tracking');
     }
 }
 

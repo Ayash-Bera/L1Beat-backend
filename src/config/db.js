@@ -1,35 +1,31 @@
 const mongoose = require('mongoose');
+const config = require('./config');
+const logger = require('../utils/logger');
 
 const connectDB = async () => {
   try {
-    const dbURI = process.env.NODE_ENV === 'production' 
-      ? process.env.PROD_MONGODB_URI 
-      : process.env.DEV_MONGODB_URI;
+    const dbURI = config.db.uri;
 
     if (!dbURI) {
       throw new Error('MongoDB URI is not defined in environment variables');
     }
 
-    console.log(`Attempting to connect to MongoDB (${process.env.NODE_ENV} environment)`);
+    logger.info(`Attempting to connect to MongoDB (${config.env} environment)`);
     
-    const conn = await mongoose.connect(dbURI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
+    const conn = await mongoose.connect(dbURI, config.db.options);
     
-    console.log(`MongoDB Connected: ${conn.connection.host} (${process.env.NODE_ENV} environment)`);
+    logger.info(`MongoDB Connected: ${conn.connection.host} (${config.env} environment)`);
     
     // Test write permissions
     try {
       await mongoose.connection.db.command({ ping: 1 });
-      console.log('MongoDB write permission test successful');
+      logger.info('MongoDB write permission test successful');
     } catch (error) {
-      console.error('MongoDB write permission test failed:', error);
+      logger.error('MongoDB write permission test failed:', error);
     }
     
   } catch (error) {
-    console.error(`MongoDB Connection Error: ${error.message}`);
-    console.error('Full error:', error);
+    logger.error(`MongoDB Connection Error: ${error.message}`, { stack: error.stack });
     process.exit(1);
   }
 };

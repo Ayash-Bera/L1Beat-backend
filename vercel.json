@@ -8,15 +8,11 @@
   ],
   "routes": [
     {
-      "src": "/api/(.*)",
-      "dest": "src/app.js"
-    },
-    {
       "src": "/(.*)",
       "dest": "src/app.js"
     }
   ],
   "env": {
-    "NODE_ENV": "production"
+    "VERCEL": "1"
   }
 }

@@ -2,6 +2,9 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const cron = require('node-cron');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const config = require('./config/config');
 const connectDB = require('./config/db');
 const chainRoutes = require('./routes/chainRoutes');
 const fetchAndUpdateData = require('./utils/fetchGlacierData');
@@ -13,47 +16,53 @@ const Chain = require('./models/chain');
 const chainService = require('./services/chainService');
 const tpsRoutes = require('./routes/tpsRoutes');
 const tpsService = require('./services/tpsService');
+const logger = require('./utils/logger');
 
 const app = express();
 
+// Check if we're running on Vercel
+const isVercel = process.env.VERCEL === '1';
+
+// Trust proxy when running on Vercel or other cloud platforms
+if (isVercel || config.isProduction) {
+  logger.info('Running behind a proxy, setting trust proxy to true');
+  app.set('trust proxy', 1);
+}
+
 // Add debugging logs
-console.log('Starting server with environment:', process.env.NODE_ENV);
-console.log('MongoDB URI:', process.env.NODE_ENV === 'production' 
-  ? 'PROD URI is set: ' + !!process.env.PROD_MONGODB_URI
-  : 'DEV URI is set: ' + !!process.env.DEV_MONGODB_URI
-);
+logger.info('Starting server', { 
+  environment: config.env,
+  mongoDbUri: config.isProduction
+    ? 'PROD URI is set: ' + !!process.env.PROD_MONGODB_URI
+    : 'DEV URI is set: ' + !!process.env.DEV_MONGODB_URI
+});
 
 // Environment-specific configurations
-const isDevelopment = process.env.NODE_ENV === 'development';
+const isDevelopment = config.env === 'development';
+
+// Add security headers
+app.use(helmet());
+
+// Rate limiting middleware
+const apiLimiter = rateLimit(config.rateLimit);
+
+// Apply rate limiting to all API routes
+app.use('/api', apiLimiter);
 
 // CORS configuration with environment-specific settings
-app.use(cors({
-  origin: isDevelopment 
-    ? '*' 
-    : ['https://l1beat.io', 'https://www.l1beat.io', 'http://localhost:4173', 'http://localhost:5173'],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: [
-    'Content-Type', 
-    'Authorization', 
-    'X-Requested-With', 
-    'Accept', 
-    'Origin',
-    'Cache-Control'
-  ]
-}));
+app.use(cors(config.cors));
 
 app.use(express.json());
 
 // Single initialization point for data updates
 const initializeDataUpdates = async () => {
-  console.log(`[${process.env.NODE_ENV}] Initializing data updates at ${new Date().toISOString()}`);
+  logger.info(`[${config.env}] Initializing data updates at ${new Date().toISOString()}`);
   
   try {
     // First update chains
-    console.log('Fetching initial chain data...');
+    logger.info('Fetching initial chain data...');
     const chains = await chainDataService.fetchChainData();
-    console.log(`Fetched ${chains.length} chains from Glacier API`);
+    logger.info(`Fetched ${chains.length} chains from Glacier API`);
 
     if (chains && chains.length > 0) {
       for (const chain of chains) {
@@ -61,68 +70,68 @@ const initializeDataUpdates = async () => {
         // Add initial TPS update for each chain
         await tpsService.updateTpsData(chain.chainId);
       }
-      console.log(`Updated ${chains.length} chains in database`);
+      logger.info(`Updated ${chains.length} chains in database`);
       
       // Verify chains were saved
       const savedChains = await Chain.find();
-      console.log('Chains in database:', {
+      logger.info('Chains in database:', {
         count: savedChains.length,
         chainIds: savedChains.map(c => c.chainId)
       });
     } else {
-      console.error('No chains fetched from Glacier API');
+      logger.error('No chains fetched from Glacier API');
     }
 
     // Then update TVL
-    console.log('Updating TVL data...');
+    logger.info('Updating TVL data...');
     await tvlService.updateTvlData();
     
     // Verify TVL update
     const lastTVL = await TVL.findOne().sort({ date: -1 });
-    console.log('TVL Update Result:', {
+    logger.info('TVL Update Result:', {
       lastUpdate: lastTVL?.date ? new Date(lastTVL.date * 1000).toISOString() : 'none',
       tvl: lastTVL?.tvl,
       timestamp: new Date().toISOString()
     });
 
   } catch (error) {
-    console.error('Initialization error:', error);
+    logger.error('Initialization error:', error);
   }
 
   // Set up scheduled updates for both production and development
-  console.log('Setting up update schedules...');
+  logger.info('Setting up update schedules...');
   
   // TVL updates every 30 minutes
-  cron.schedule('*/30 * * * *', async () => {
+  cron.schedule(config.cron.tvlUpdate, async () => {
     try {
-      console.log(`[CRON] Starting scheduled TVL update at ${new Date().toISOString()}`);
+      logger.info(`[CRON] Starting scheduled TVL update at ${new Date().toISOString()}`);
       await tvlService.updateTvlData();
-      console.log('[CRON] TVL update completed');
+      logger.info('[CRON] TVL update completed');
     } catch (error) {
-      console.error('[CRON] TVL update failed:', error);
+      logger.error('[CRON] TVL update failed:', error);
     }
   });
 
   // Chain and TPS updates every hour
-  cron.schedule('0 * * * *', async () => {
+  cron.schedule(config.cron.chainUpdate, async () => {
     try {
-      console.log(`[CRON] Starting scheduled chain update at ${new Date().toISOString()}`);
+      logger.info(`[CRON] Starting scheduled chain update at ${new Date().toISOString()}`);
       const chains = await chainDataService.fetchChainData();
       for (const chain of chains) {
         await chainService.updateChain(chain);
         // Add TPS update for each chain
         await tpsService.updateTpsData(chain.chainId);
       }
-      console.log(`[CRON] Updated ${chains.length} chains with TPS data`);
+      logger.info(`[CRON] Updated ${chains.length} chains with TPS data`);
     } catch (error) {
-      console.error('[CRON] Chain/TPS update failed:', error);
+      logger.error('[CRON] Chain/TPS update failed:', error);
     }
   });
 
   // Check TPS data every 15 minutes
-  cron.schedule('*/15 * * * *', async () => {
+  cron.schedule(config.cron.tpsVerification, async () => {
     try {
-        console.log(`[CRON] Starting TPS verification at ${new Date().toISOString()}`);
+        logger.info(`[CRON] Starting TPS verification at ${new Date().toISOString()}`);
         
         const currentTime = Math.floor(Date.now() / 1000);
         const oneDayAgo = currentTime - (24 * 60 * 60);
@@ -138,7 +147,7 @@ const initializeDataUpdates = async () => {
         );
 
         if (chainsNeedingUpdate.length > 0) {
-            console.log(`[CRON] Found ${chainsNeedingUpdate.length} chains needing TPS update`);
+            logger.info(`[CRON] Found ${chainsNeedingUpdate.length} chains needing TPS update`);
             
             // Update chains in batches
             const BATCH_SIZE = 5;
@@ -153,9 +162,9 @@ const initializeDataUpdates = async () => {
             }
         }
 
-        console.log(`[CRON] TPS verification complete at ${new Date().toISOString()}`);
+        logger.info(`[CRON] TPS verification complete at ${new Date().toISOString()}`);
     } catch (error) {
-        console.error('[CRON] TPS verification failed:', error);
+        logger.error('[CRON] TPS verification failed:', error);
     }
   });
 };
@@ -175,17 +184,29 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
+// Cache status endpoint (development only)
+if (isDevelopment) {
+  const cacheManager = require('./utils/cacheManager');
+  app.get('/api/cache/status', (req, res) => {
+    res.json({
+      stats: cacheManager.getStats(),
+      environment: config.env,
+      timestamp: new Date().toISOString()
+    });
+  });
+}
+
 // Development-only middleware
 if (isDevelopment) {
   app.use((req, res, next) => {
-    console.log(`${req.method} ${req.path} - ${new Date().toISOString()}`);
+    logger.debug(`${req.method} ${req.path}`, { timestamp: new Date().toISOString() });
     next();
   });
 }
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
+  logger.error('Error:', { message: err.message, stack: err.stack, path: req.path });
   
   // Send proper JSON response
   res.status(500).json({
@@ -197,6 +218,7 @@ app.use((err, req, res, next) => {
 
 // Add catch-all route for undefined routes
 app.use('*', (req, res) => {
+  logger.warn('Not Found:', { path: req.path, method: req.method });
   res.status(404).json({
     error: 'Not Found',
     message: 'The requested resource was not found',
@@ -213,24 +235,18 @@ const PORT = process.env.PORT || 5001;
 module.exports = app;
 
 // Only listen if not running on Vercel
-if (process.env.NODE_ENV !== 'production') {
-    const server = app.listen(PORT, () => {
-        console.log(`Server running on port ${PORT}`);
-        console.log(`Try accessing: http://localhost:${PORT}/api/chains`);
+if (!isVercel) {
+  const server = app.listen(PORT, () => {
+    logger.info(`Server running on port ${PORT}`, {
+      environment: config.env,
+      port: PORT,
+      timestamp: new Date().toISOString()
     });
+    logger.info(`Try accessing: http://localhost:${PORT}/api/chains`);
+  });
 
-    // Add error handler for the server
-    server.on('error', (error) => {
-        console.error('Server error:', error);
-    });
-} else {
-    // Add explicit handling for production
-    const server = app.listen(PORT, () => {
-        console.log(`Production server running on port ${PORT}`);
-        console.log(`Try accessing: http://localhost:${PORT}/api/chains`);
-    });
-
-    server.on('error', (error) => {
-        console.error('Production server error:', error);
-    });
+  // Add error handler for the server
+  server.on('error', (error) => {
+    logger.error('Server error:', { error: error.message, stack: error.stack });
+  });
 }

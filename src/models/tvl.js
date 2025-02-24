@@ -16,4 +16,7 @@ const tvlSchema = new mongoose.Schema({
   }
 });
 
+// Add index for better query performance
+tvlSchema.index({ date: -1 });
+
 module.exports = mongoose.model('TVL', tvlSchema); 

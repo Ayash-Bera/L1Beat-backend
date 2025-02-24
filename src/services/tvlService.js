@@ -1,23 +1,26 @@
 const TVL = require('../models/tvl');
 const axios = require('axios');
+const cacheManager = require('../utils/cacheManager');
+const config = require('../config/config');
+const logger = require('../utils/logger');
 
 class TvlService {
   async updateTvlData(retryCount = 3) {
     for (let attempt = 1; attempt <= retryCount; attempt++) {
       try {
-        console.log(`[TVL Update] Attempt ${attempt}/${retryCount} at ${new Date().toISOString()}`);
+        logger.info(`[TVL Update] Attempt ${attempt}/${retryCount} at ${new Date().toISOString()}`);
         
         // Get both historical and current TVL
         const [historicalResponse, currentResponse] = await Promise.all([
-          axios.get('https://api.llama.fi/v2/historicalChainTvl/Avalanche', {
-            timeout: 30000,
+          axios.get(`${config.api.defillama.baseUrl}/historicalChainTvl/Avalanche`, {
+            timeout: config.api.defillama.timeout,
             headers: {
               'Accept': 'application/json',
               'User-Agent': 'l1beat-backend'
             }
           }),
-          axios.get('https://api.llama.fi/v2/chains', {
-            timeout: 30000,
+          axios.get(`${config.api.defillama.baseUrl}/chains`, {
+            timeout: config.api.defillama.timeout,
             headers: {
               'Accept': 'application/json',
               'User-Agent': 'l1beat-backend'
@@ -61,7 +64,7 @@ class TvlService {
         // Sort by date in descending order
         validTvlData.sort((a, b) => b.date - a.date);
 
-        console.log('TVL Data Analysis:', {
+        logger.info('TVL Data Analysis:', {
           historicalEntries: historicalTvl.length,
           currentTvl: currentTvl.tvl,
           mostRecentHistorical: new Date(historicalTvl[historicalTvl.length - 1].date * 1000).toISOString(),
@@ -69,30 +72,47 @@ class TvlService {
           combinedEntries: validTvlData.length
         });
 
-        // Update database
-        await TVL.deleteMany({});
-        const result = await TVL.insertMany(
-          validTvlData.map(item => ({
-            date: item.date,
-            tvl: item.tvl,
-            lastUpdated: new Date()
-          }))
-        );
+        // Update database using bulkWrite for better performance
+        const bulkOps = validTvlData.map(item => ({
+          updateOne: {
+            filter: { date: item.date },
+            update: { 
+              $set: { 
+                tvl: item.tvl,
+                lastUpdated: new Date() 
+              }
+            },
+            upsert: true
+          }
+        }));
+
+        logger.info(`Preparing to update ${bulkOps.length} TVL records`);
+        const result = await TVL.bulkWrite(bulkOps);
 
         // Verify the update
         const latestInDb = await TVL.findOne().sort({ date: -1 });
-        console.log('Database verification after update:', {
-          recordsInserted: result.length,
+        logger.info('Database verification after update:', {
+          recordsMatched: result.matchedCount,
+          recordsModified: result.modifiedCount,
+          recordsUpserted: result.upsertedCount,
           latestRecord: {
             date: new Date(latestInDb.date * 1000).toISOString(),
             tvl: latestInDb.tvl
           }
         });
 
+        // Invalidate all TVL cache entries
+        Object.keys(cacheManager.cache).forEach(key => {
+          if (key.startsWith('tvl_history_')) {
+            cacheManager.delete(key);
+          }
+        });
+        logger.info('TVL cache invalidated after update');
+
         return true;
 
       } catch (error) {
-        console.error(`TVL Update Error (Attempt ${attempt}/${retryCount}):`, {
+        logger.error(`TVL Update Error (Attempt ${attempt}/${retryCount}):`, {
           message: error.message,
           status: error.response?.status,
           data: error.response?.data,
@@ -104,7 +124,7 @@ class TvlService {
         }
         
         const delay = attempt * 5000;
-        console.log(`Retrying in ${delay}ms...`);
+        logger.info(`Retrying in ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
@@ -112,12 +132,21 @@ class TvlService {
 
   async getTvlHistory(days = 30) {
     try {
-      console.log(`Fetching TVL history for last ${days} days`);
+      logger.info(`Fetching TVL history for last ${days} days`);
+      
+      // Check cache first
+      const cacheKey = `tvl_history_${days}`;
+      const cachedData = cacheManager.get(cacheKey);
+      if (cachedData) {
+        logger.debug(`Returning cached TVL history for ${days} days`);
+        return cachedData;
+      }
+      
       const cutoffDate = Math.floor(Date.now() / 1000) - (days * 24 * 60 * 60);
       
       // Always try to update data before returning
       await this.updateTvlData().catch(error => {
-        console.error('Failed to update TVL data:', error);
+        logger.error('Failed to update TVL data:', { error: error.message });
       });
       
       const data = await TVL.find({ date: { $gte: cutoffDate } })
@@ -125,10 +154,14 @@ class TvlService {
         .select('-_id date tvl')
         .lean();
       
-      console.log(`Found ${data.length} TVL records in database`);
+      logger.info(`Found ${data.length} TVL records in database`);
+      
+      // Cache the result for 15 minutes
+      cacheManager.set(cacheKey, data, config.cache.tvlHistory);
+      
       return data;
     } catch (error) {
-      console.error('Error in getTvlHistory:', error);
+      logger.error('Error in getTvlHistory:', { error: error.message, stack: error.stack });
       throw new Error(`Error fetching TVL history: ${error.message}`);
     }
   }

@@ -3,9 +3,12 @@ const router = express.Router();
 const tpsService = require('../services/tpsService');
 const Chain = require('../models/chain');
 const TPS = require('../models/tps');
+const { validate, validators } = require('../utils/validationMiddleware');
+const logger = require('../utils/logger');
+const config = require('../config/config');
 
 // Get TPS history for a chain
-router.get('/chains/:chainId/tps/history', async (req, res) => {
+router.get('/chains/:chainId/tps/history', validate(validators.getTpsHistory), async (req, res) => {
   try {
     const { chainId } = req.params;
     const days = parseInt(req.query.days) || 30;
@@ -17,7 +20,7 @@ router.get('/chains/:chainId/tps/history', async (req, res) => {
       data
     });
   } catch (error) {
-    console.error('TPS History Error:', error);
+    logger.error('TPS History Error:', { chainId: req.params.chainId, error: error.message });
     res.status(500).json({ 
       success: false, 
       error: error.message 
@@ -26,7 +29,7 @@ router.get('/chains/:chainId/tps/history', async (req, res) => {
 });
 
 // Get latest TPS for a chain
-router.get('/chains/:chainId/tps/latest', async (req, res) => {
+router.get('/chains/:chainId/tps/latest', validate(validators.getLatestTps), async (req, res) => {
   try {
     const { chainId } = req.params;
     const data = await tpsService.getLatestTps(chainId);
@@ -37,7 +40,7 @@ router.get('/chains/:chainId/tps/latest', async (req, res) => {
       timestamp: data ? new Date(data.timestamp * 1000).toISOString() : null
     });
   } catch (error) {
-    console.error('Latest TPS Error:', error);
+    logger.error('Latest TPS Error:', { chainId: req.params.chainId, error: error.message });
     res.status(500).json({ 
       success: false, 
       error: error.message 
@@ -55,7 +58,7 @@ router.get('/tps/network/latest', async (req, res) => {
       timestamp: new Date().toISOString()
     });
   } catch (error) {
-    console.error('Network TPS Error:', error);
+    logger.error('Network TPS Error:', { error: error.message });
     res.status(500).json({ 
       success: false, 
       error: error.message 
@@ -75,7 +78,7 @@ router.get('/tps/network/history', async (req, res) => {
       period: `${days} days`
     });
   } catch (error) {
-    console.error('Network TPS History Error:', error);
+    logger.error('Network TPS History Error:', { days: req.query.days, error: error.message });
     res.status(500).json({ 
       success: false, 
       error: error.message 
@@ -118,7 +121,7 @@ router.get('/tps/health', async (req, res) => {
                 chainIds: chains.map(c => c.chainId),
                 recentTpsRecords: tps.length,
                 lastTpsUpdate: tps[0] ? new Date(tps[0].timestamp * 1000).toISOString() : null,
-                environment: process.env.NODE_ENV,
+                environment: config.env,
                 chainsWithTps: chainTpsCount.length,
                 chainTpsDetails: chainTpsCount.map(c => ({
                     chainId: c._id,
@@ -132,6 +135,7 @@ router.get('/tps/health', async (req, res) => {
             }
         });
     } catch (error) {
+        logger.error('TPS Health Check Error:', { error: error.message });
         res.status(500).json({
             success: false,
             error: error.message
@@ -181,7 +185,7 @@ router.get('/tps/diagnostic', async (req, res) => {
 
         res.json({
             success: true,
-            environment: process.env.NODE_ENV,
+            environment: config.env,
             timeRange: {
                 start: new Date(oneDayAgo * 1000).toISOString(),
                 end: new Date(currentTime * 1000).toISOString()
@@ -195,7 +199,7 @@ router.get('/tps/diagnostic', async (req, res) => {
             chainDetails: chainData.sort((a, b) => (b.latestValue || 0) - (a.latestValue || 0))
         });
     } catch (error) {
-        console.error('Diagnostic Error:', error);
+        logger.error('TPS Diagnostic Error:', { error: error.message });
         res.status(500).json({ 
             success: false, 
             error: error.message 
@@ -217,7 +221,7 @@ router.get('/tps/status', async (req, res) => {
         
         res.json({
             success: true,
-            environment: process.env.NODE_ENV,
+            environment: config.env,
             timestamp: new Date().toISOString(),
             stats: {
                 tpsRecords: tpsCount,
@@ -229,6 +233,7 @@ router.get('/tps/status', async (req, res) => {
             }
         });
     } catch (error) {
+        logger.error('TPS Status Error:', { error: error.message });
         res.status(500).json({
             success: false,
             error: error.message,
