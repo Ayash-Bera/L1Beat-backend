@@ -101,6 +101,23 @@ const initializeDataUpdates = async () => {
     const teleporterService = require('./services/teleporterService');
     await teleporterService.updateTeleporterData();
 
+    // Initialize weekly data if needed
+    if (config.initWeeklyData) {
+      logger.info('Initializing weekly data...');
+      (async () => {
+        try {
+          // Use the new method that fetches all data at once
+          await teleporterService.fetchWeeklyTeleporterDataAtOnce();
+          logger.info('Weekly data initialization completed');
+        } catch (error) {
+          logger.error('Error initializing weekly data:', {
+            message: error.message,
+            stack: error.stack
+          });
+        }
+      })();
+    }
+
   } catch (error) {
     logger.error('Initialization error:', error);
   }
@@ -196,8 +213,8 @@ const initializeDataUpdates = async () => {
         logger.info('[CRON] No weekly teleporter data found, initializing for the first time');
       }
       
-      // Start the update
-      await teleporterService.updateWeeklyTeleporterData();
+      // Start the update using the new method that fetches all data at once
+      await teleporterService.fetchWeeklyTeleporterDataAtOnce();
       logger.info('[CRON] Weekly teleporter update completed');
     } catch (error) {
       logger.error('[CRON] Weekly teleporter update failed:', error);

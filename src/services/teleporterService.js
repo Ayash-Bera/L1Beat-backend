@@ -208,6 +208,7 @@ class TeleporterService {
                                 ? Math.floor(messageTimestamp / 1000) 
                                 : messageTimestamp;
                             
+                            // Check if the message is within the specified time range
                             if (timestampInSeconds >= startTime) {
                                 validMessages.push(message);
                             } else {
@@ -218,6 +219,7 @@ class TeleporterService {
                                     page: pageCount,
                                     messageId: message.messageId || 'unknown'
                                 });
+                                break; // Break the loop once we find a message outside our time range
                             }
                         }
                         
@@ -226,7 +228,9 @@ class TeleporterService {
                         
                         // If we reached the time limit, stop pagination
                         if (reachedTimeLimit) {
-                            logger.info(`Reached time limit (${startHoursAgo} hours), stopping pagination`);
+                            logger.info(`Reached time limit (${startHoursAgo} hours), stopping pagination`, {
+                                service: "l1beat-backend"
+                            });
                             break;
                         }
                         
@@ -672,32 +676,13 @@ class TeleporterService {
                 }
             }
             
-            // If we have recent data and the update is completed or failed, use it
+            // If we have recent data, use it
             if (recentWeeklyData) {
                 logger.info('Using recent weekly teleporter message count data from database', {
                     updatedAt: recentWeeklyData.updatedAt,
                     totalMessages: recentWeeklyData.totalMessages,
                     timeWindow: recentWeeklyData.timeWindow
                 });
-                
-                // If we have recent data and there's an update in progress, check if the data is newer than the update
-                if (updateState && updateState.state === 'in_progress' && 
-                    recentWeeklyData.updatedAt > updateState.startedAt) {
-                    logger.info('Found update in progress but data is newer, marking update as completed', {
-                        dataUpdatedAt: recentWeeklyData.updatedAt,
-                        updateStartedAt: updateState.startedAt
-                    });
-                    
-                    updateState.state = 'completed';
-                    updateState.lastUpdatedAt = new Date();
-                    updateState.progress = {
-                        currentDay: 8,
-                        totalDays: 7,
-                        daysCompleted: 7,
-                        messagesCollected: recentWeeklyData.totalMessages
-                    };
-                    await updateState.save();
-                }
                 
                 return recentWeeklyData.messageCounts;
             }
@@ -714,85 +699,14 @@ class TeleporterService {
                     age: Math.round((Date.now() - anyWeeklyData.updatedAt) / (60 * 1000)) + ' minutes old'
                 });
                 
-                // If there's no update in progress or the last update was more than 24 hours ago,
-                // trigger a background update
-                if (!updateState || updateState.state !== 'in_progress') {
-                    if (Date.now() - anyWeeklyData.updatedAt > 24 * 60 * 60 * 1000) {
-                        logger.info('Weekly data is older than 24 hours, but not triggering background update to avoid race conditions');
-                        // Removed the automatic update trigger to avoid race conditions
-                    }
-                } else {
-                    // If an update is in progress, log the status
-                    logger.info('Weekly data update is already in progress', {
-                        startedAt: updateState.startedAt,
-                        progress: updateState.progress
-                    });
-                    
-                    // If the data is newer than the update, mark the update as completed
-                    if (anyWeeklyData.updatedAt > updateState.startedAt) {
-                        logger.info('Found update in progress but data is newer, marking update as completed', {
-                            dataUpdatedAt: anyWeeklyData.updatedAt,
-                            updateStartedAt: updateState.startedAt
-                        });
-                        
-                        updateState.state = 'completed';
-                        updateState.lastUpdatedAt = new Date();
-                        updateState.progress = {
-                            currentDay: 8,
-                            totalDays: 7,
-                            daysCompleted: 7,
-                            messagesCollected: anyWeeklyData.totalMessages
-                        };
-                        await updateState.save();
-                    }
-                }
-                
                 return anyWeeklyData.messageCounts;
             }
             
-            // If no data in database at all, log a warning but don't start an update
+            // If no data in database at all, log a warning
             logger.warn('No weekly teleporter data in database');
             
-            // Check if an update is already in progress
-            if (updateState && updateState.state === 'in_progress') {
-                logger.info('Weekly data update is already in progress', {
-                    startedAt: updateState.startedAt,
-                    progress: updateState.progress
-                });
-            } else {
-                // Trigger an update if no data exists
-                logger.info('No update in progress and no data available. Triggering initial data update.');
-                
-                // Create a new update state
-                const newUpdateState = new TeleporterUpdateState({
-                    updateType: 'weekly',
-                    state: 'in_progress',
-                    startedAt: new Date(),
-                    lastUpdatedAt: new Date(),
-                    progress: {
-                        currentDay: 1,
-                        totalDays: 7,
-                        daysCompleted: 0,
-                        messagesCollected: 0
-                    }
-                });
-                
-                await newUpdateState.save();
-                
-                // Trigger the update in the background
-                this.updateWeeklyTeleporterData().catch(err => {
-                    logger.error('Error during automatic weekly data update:', {
-                        message: err.message,
-                        stack: err.stack
-                    });
-                });
-                
-                logger.info('Weekly data update has been triggered in the background');
-            }
-            
-            // Return empty array while update is in progress
+            // Return empty array while update is in progress or if no data exists
             return [];
-            
         } catch (error) {
             logger.error('Error processing weekly teleporter messages:', {
                 message: error.message,
@@ -888,8 +802,8 @@ class TeleporterService {
             
             logger.info(`Fetching messages for day ${currentDay}: ${startHoursAgo}-${endHoursAgo} hours ago`);
             
-            // We'll fetch each day in 12-hour chunks to avoid timeouts
-            const HOURS_PER_CHUNK = 4; // Changed from 12 to 4 hours per chunk
+            // We'll fetch each day in smaller chunks to avoid timeouts
+            const HOURS_PER_CHUNK = 4; // 4 hours per chunk
             const CHUNKS_PER_DAY = 24 / HOURS_PER_CHUNK; // 6 chunks per day
             
             let dayMessages = [];
@@ -900,7 +814,9 @@ class TeleporterService {
                     const chunkStartHours = endHoursAgo + (HOURS_PER_CHUNK * (CHUNKS_PER_DAY - i));
                     const chunkEndHours = chunkStartHours - HOURS_PER_CHUNK;
                     
-                    logger.info(`Fetching chunk ${i+1}/${CHUNKS_PER_DAY} for day ${currentDay}: ${chunkStartHours}-${chunkEndHours} hours ago`);
+                    logger.info(`Fetching chunk ${i+1}/${CHUNKS_PER_DAY} for day ${currentDay}: ${chunkStartHours}-${chunkEndHours} hours ago`, {
+                        service: "l1beat-backend"
+                    });
                     
                     // Update the state to show which chunk we're processing
                     updateState.progress = {
@@ -924,7 +840,8 @@ class TeleporterService {
                         hitPageLimit: result.hitPageLimit,
                         reachedTimeLimit: result.reachedTimeLimit,
                         dayMessages: dayMessages.length,
-                        totalMessages: totalMessagesCollected + dayMessages.length
+                        totalMessages: totalMessagesCollected + dayMessages.length,
+                        service: "l1beat-backend"
                     });
                     
                     // If we hit the page limit, log a warning
@@ -959,7 +876,9 @@ class TeleporterService {
             
             // Process the collected messages for this day
             if (dayMessages.length > 0) {
-                logger.info(`Processing ${dayMessages.length} teleporter messages for day ${currentDay}...`);
+                logger.info(`Processing ${dayMessages.length} teleporter messages for day ${currentDay}...`, {
+                    service: "l1beat-backend"
+                });
                 
                 // Process the messages to get counts by source and destination
                 const processedDayData = await this.processMessages(dayMessages);
@@ -1007,7 +926,9 @@ class TeleporterService {
                 updateState.lastUpdatedAt = new Date();
                 await updateState.save();
                 
-                logger.info(`Completed day ${currentDay}/7 with ${dayMessages.length} messages, ${daysCompleted + 1} days completed`);
+                logger.info(`Completed day ${currentDay}/7 with ${dayMessages.length} messages, ${daysCompleted + 1} days completed`, {
+                    service: "l1beat-backend"
+                });
                 
                 // If we've completed all 7 days, finalize the weekly data
                 if (currentDay >= 7) {
@@ -1088,14 +1009,16 @@ class TeleporterService {
                     };
                 } else {
                     // We've completed this day but not all 7 days
-                    return {
-                        success: true,
-                        day: currentDay,
-                        daysCompleted: daysCompleted + 1,
-                        messageCount: dayMessages.length,
-                        totalMessages: totalMessagesCollected,
-                        completed: false
-                    };
+                    // Continue to the next day by calling this method recursively
+                    logger.info(`Moving to day ${currentDay + 1}/7...`, {
+                        service: "l1beat-backend"
+                    });
+                    
+                    // Add a delay before processing the next day to avoid rate limiting
+                    await this.sleep(10000);
+                    
+                    // Process the next day
+                    return await this.updateWeeklyTeleporterData();
                 }
             } else {
                 logger.warn(`No teleporter messages found for day ${currentDay} (${startHoursAgo}-${endHoursAgo} hours ago)`);
@@ -1225,14 +1148,16 @@ class TeleporterService {
                     };
                 } else {
                     // We've completed this day but not all 7 days
-                    return {
-                        success: true,
-                        day: currentDay,
-                        daysCompleted: daysCompleted + 1,
-                        messageCount: 0,
-                        totalMessages: totalMessagesCollected,
-                        completed: false
-                    };
+                    // Continue to the next day by calling this method recursively
+                    logger.info(`Moving to day ${currentDay + 1}/7 (no messages found for day ${currentDay})...`, {
+                        service: "l1beat-backend"
+                    });
+                    
+                    // Add a delay before processing the next day to avoid rate limiting
+                    await this.sleep(10000);
+                    
+                    // Process the next day
+                    return await this.updateWeeklyTeleporterData();
                 }
             }
         } catch (error) {
@@ -1423,6 +1348,203 @@ class TeleporterService {
             destinationChain: item.destinationChain,
             messageCount: item.messageCount
         }));
+    }
+
+    /**
+     * Fetch weekly teleporter data at once (168 hours)
+     * This method is optimized for environments without strict timeout limits
+     * @returns {Promise<Object>} Object with success status and processed data
+     */
+    async fetchWeeklyTeleporterDataAtOnce() {
+        try {
+            logger.info('Starting weekly teleporter data fetch at once (168 hours)...');
+            
+            // Create or update the update state
+            let updateState = await TeleporterUpdateState.findOne({ updateType: 'weekly' });
+            if (!updateState) {
+                updateState = new TeleporterUpdateState({
+                    updateType: 'weekly',
+                    state: 'in_progress',
+                    startedAt: new Date(),
+                    lastUpdatedAt: new Date(),
+                    progress: {
+                        messagesCollected: 0,
+                        status: 'fetching'
+                    }
+                });
+            } else {
+                updateState.state = 'in_progress';
+                updateState.startedAt = new Date();
+                updateState.lastUpdatedAt = new Date();
+                updateState.error = null;
+                updateState.progress = {
+                    messagesCollected: 0,
+                    status: 'fetching'
+                };
+            }
+            await updateState.save();
+            
+            // Fetch all messages for the past 168 hours (7 days)
+            logger.info('Fetching teleporter messages for the past 168 hours...');
+            
+            // We'll use a larger page size and increase MAX_PAGES since we're not concerned about timeouts
+            const originalPageSize = this.PAGE_SIZE;
+            const originalMaxPages = this.MAX_PAGES;
+            this.PAGE_SIZE = 100; // Increase page size for faster fetching
+            this.MAX_PAGES = 1000; // Significantly increase max pages to ensure we get all data
+            
+            try {
+                // Split the 7-day window into 2-day chunks to avoid hitting page limits
+                // This ensures we get complete data even for high-volume periods
+                const chunks = [
+                    { start: 168, end: 120 }, // Days 5-7
+                    { start: 120, end: 72 },  // Days 3-5
+                    { start: 72, end: 24 },   // Days 1-3
+                    { start: 24, end: 0 }     // Last 24 hours
+                ];
+                
+                let allMessages = [];
+                let hitAnyPageLimit = false;
+                
+                // Process each time chunk
+                for (let i = 0; i < chunks.length; i++) {
+                    const chunk = chunks[i];
+                    logger.info(`Fetching chunk ${i+1}/${chunks.length}: ${chunk.start}-${chunk.end} hours ago`);
+                    
+                    // Update state to show progress
+                    updateState.progress = {
+                        messagesCollected: allMessages.length,
+                        status: `fetching chunk ${i+1}/${chunks.length}`,
+                        currentChunk: i+1,
+                        totalChunks: chunks.length
+                    };
+                    updateState.lastUpdatedAt = new Date();
+                    await updateState.save();
+                    
+                    // Add a delay between chunks to avoid rate limiting
+                    if (i > 0) {
+                        await this.sleep(5000);
+                    }
+                    
+                    // Fetch messages for this time chunk
+                    const result = await this.fetchTeleporterMessagesWithTimeRange(chunk.start, chunk.end);
+                    
+                    // Add messages from this chunk to our collection
+                    allMessages = [...allMessages, ...result.messages];
+                    
+                    // Track if we hit page limit in any chunk
+                    if (result.hitPageLimit) {
+                        hitAnyPageLimit = true;
+                        logger.warn(`Hit page limit in chunk ${i+1}/${chunks.length}, some messages may be missing`);
+                    }
+                    
+                    logger.info(`Completed chunk ${i+1}/${chunks.length}, collected ${result.messages.length} messages`, {
+                        hitPageLimit: result.hitPageLimit,
+                        reachedTimeLimit: result.reachedTimeLimit,
+                        totalMessages: allMessages.length
+                    });
+                }
+                
+                // Update progress
+                updateState.progress = {
+                    messagesCollected: allMessages.length,
+                    status: 'processing'
+                };
+                updateState.lastUpdatedAt = new Date();
+                await updateState.save();
+                
+                logger.info(`Fetched ${allMessages.length} teleporter messages for the past 7 days`, {
+                    hitAnyPageLimit
+                });
+                
+                // Process the messages
+                if (allMessages.length > 0) {
+                    // Process the messages to get counts by source and destination
+                    const processedData = await this.processMessages(allMessages);
+                    
+                    // Save the processed data to the database
+                    const teleporterData = new TeleporterMessage({
+                        updatedAt: new Date(),
+                        messageCounts: processedData,
+                        totalMessages: allMessages.length,
+                        timeWindow: 168, // 7 days * 24 hours
+                        dataType: 'weekly'
+                    });
+                    
+                    await teleporterData.save();
+                    
+                    // Update the state to completed
+                    updateState.state = 'completed';
+                    updateState.lastUpdatedAt = new Date();
+                    updateState.progress = {
+                        messagesCollected: allMessages.length,
+                        status: 'completed'
+                    };
+                    
+                    if (hitAnyPageLimit) {
+                        updateState.error = {
+                            message: 'Hit page limit in some chunks, some messages may be missing',
+                            details: `Collected ${allMessages.length} messages but hit the page limit in some time chunks`
+                        };
+                    } else {
+                        updateState.error = null;
+                    }
+                    
+                    await updateState.save();
+                    
+                    logger.info(`Saved weekly teleporter data with ${processedData.length} chain pairs and ${allMessages.length} total messages`);
+                    
+                    return {
+                        success: true,
+                        messageCount: processedData.length,
+                        totalMessages: allMessages.length
+                    };
+                } else {
+                    logger.warn('No teleporter messages found for the past 7 days');
+                    
+                    // Update the state to failed
+                    updateState.state = 'failed';
+                    updateState.lastUpdatedAt = new Date();
+                    updateState.error = {
+                        message: 'No messages found',
+                        details: 'No messages found for the past 7 days'
+                    };
+                    await updateState.save();
+                    
+                    return {
+                        success: false,
+                        error: 'No messages found'
+                    };
+                }
+            } finally {
+                // Restore original settings
+                this.PAGE_SIZE = originalPageSize;
+                this.MAX_PAGES = originalMaxPages;
+            }
+        } catch (error) {
+            logger.error('Error fetching weekly teleporter data at once:', {
+                message: error.message,
+                stack: error.stack
+            });
+            
+            // Update the state to failed
+            try {
+                let updateState = await TeleporterUpdateState.findOne({ updateType: 'weekly' });
+                if (updateState) {
+                    updateState.state = 'failed';
+                    updateState.lastUpdatedAt = new Date();
+                    updateState.error = {
+                        message: error.message,
+                        stack: error.stack
+                    };
+                    await updateState.save();
+                }
+            } catch (stateError) {
+                logger.error('Error updating state:', stateError);
+            }
+            
+            throw error;
+        }
     }
 }
 

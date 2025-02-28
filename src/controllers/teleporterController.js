@@ -63,9 +63,8 @@ exports.getDailyCrossChainMessageCount = async (req, res) => {
 exports.getWeeklyCrossChainMessageCount = async (req, res) => {
     try {
         logger.info('Fetching weekly cross-chain message count (last 7 days)...');
-        const messageCount = await teleporterService.getWeeklyCrossChainMessageCount();
         
-        // Get the most recent data from the database to include metadata
+        // Get the most recent data from the database
         const recentData = await teleporterService.getAnyMessageCountFromDB('weekly');
         
         // Check if an update is in progress
@@ -73,38 +72,76 @@ exports.getWeeklyCrossChainMessageCount = async (req, res) => {
             updateType: 'weekly'
         });
         
-        // If we have recent data and the update state is stale or inconsistent, fix it
-        if (recentData && updateState && updateState.state === 'in_progress') {
+        // Determine if we need to trigger an update
+        let updateTriggered = false;
+        
+        // If we have no data or data is older than 24 hours, and no update is in progress, trigger an update
+        if ((!recentData || (Date.now() - new Date(recentData.updatedAt).getTime() > 24 * 60 * 60 * 1000)) && 
+            (!updateState || updateState.state !== 'in_progress')) {
+            
+            logger.info('Weekly data is missing or older than 24 hours, triggering background update');
+            
+            // Trigger the update in the background using the new method that fetches all data at once
+            teleporterService.fetchWeeklyTeleporterDataAtOnce().catch(err => {
+                logger.error('Error during automatic weekly data update:', {
+                    message: err.message,
+                    stack: err.stack
+                });
+            });
+            
+            updateTriggered = true;
+            logger.info('Weekly data update has been triggered in the background');
+        }
+        // If we have stale update state, fix it
+        else if (updateState && updateState.state === 'in_progress') {
             // Check if the update state is stale (hasn't been updated in 5 minutes)
             const lastUpdated = new Date(updateState.lastUpdatedAt);
             const timeSinceUpdate = new Date().getTime() - lastUpdated.getTime();
             
-            // If the update is stale or if the data is newer than the update state, mark it as completed
+            // If the update is stale or if the data is newer than the update state, mark it as failed
             if (timeSinceUpdate > 5 * 60 * 1000 || 
-                (recentData.updatedAt && new Date(recentData.updatedAt) > new Date(updateState.startedAt))) {
-                logger.info('Found stale or inconsistent update state, marking as completed', {
+                (recentData && recentData.updatedAt && new Date(recentData.updatedAt) > new Date(updateState.startedAt))) {
+                logger.info('Found stale or inconsistent update state, marking as failed', {
                     updateStateLastUpdated: lastUpdated.toISOString(),
-                    dataUpdatedAt: recentData.updatedAt.toISOString(),
+                    dataUpdatedAt: recentData ? recentData.updatedAt.toISOString() : 'No data',
                     timeSinceUpdateMs: timeSinceUpdate
                 });
                 
-                // Update the state to completed
-                updateState.state = 'completed';
+                // Update the state to failed
+                updateState.state = 'failed';
                 updateState.lastUpdatedAt = new Date();
-                updateState.progress = {
-                    currentDay: 8,
-                    totalDays: 7,
-                    daysCompleted: 7,
-                    messagesCollected: recentData.totalMessages
+                updateState.error = {
+                    message: 'Update timed out',
+                    details: `No updates for ${Math.round(timeSinceUpdate / 1000 / 60)} minutes`
                 };
                 await updateState.save();
+                
+                // If data is very old, trigger a new update
+                if (!recentData || (Date.now() - new Date(recentData.updatedAt).getTime() > 24 * 60 * 60 * 1000)) {
+                    logger.info('Weekly data is missing or older than 24 hours, triggering new background update');
+                    
+                    // Trigger the update in the background using the new method that fetches all data at once
+                    teleporterService.fetchWeeklyTeleporterDataAtOnce().catch(err => {
+                        logger.error('Error during automatic weekly data update:', {
+                            message: err.message,
+                            stack: err.stack
+                        });
+                    });
+                    
+                    updateTriggered = true;
+                    logger.info('Weekly data update has been triggered in the background');
+                }
             }
         }
+        
+        // Get the message count data (this will use cached data if available)
+        const messageCount = await teleporterService.getWeeklyCrossChainMessageCount();
         
         logger.info('Weekly cross-chain message count fetched:', {
             count: messageCount.length,
             totalMessages: messageCount.reduce((sum, item) => sum + item.messageCount, 0),
-            updateInProgress: updateState?.state === 'in_progress'
+            updateInProgress: updateState?.state === 'in_progress',
+            updateTriggered
         });
         
         // Ensure we're working with plain objects, not Mongoose documents
@@ -142,12 +179,7 @@ exports.getWeeklyCrossChainMessageCount = async (req, res) => {
                     state: updateState.state,
                     startedAt: updateState.startedAt,
                     lastUpdatedAt: updateState.lastUpdatedAt,
-                    progress: {
-                        currentDay: progress.currentDay || 1,
-                        totalDays: progress.totalDays || 7,
-                        daysCompleted: progress.daysCompleted || 0,
-                        messagesCollected: progress.messagesCollected || 0
-                    }
+                    progress: progress
                 };
                 
                 logger.info('Including update status in response', {
@@ -156,21 +188,12 @@ exports.getWeeklyCrossChainMessageCount = async (req, res) => {
                     lastUpdatedAt: updateState.lastUpdatedAt,
                     timeSinceUpdateMs: timeSinceUpdate
                 });
-            } else {
-                // If the update is stale, mark it as failed but don't include it in the response
-                logger.warn('Found stale update state, marking as failed but not including in response', {
-                    lastUpdated: lastUpdated.toISOString(),
-                    timeSinceUpdateMs: timeSinceUpdate
-                });
-                
-                updateState.state = 'failed';
-                updateState.lastUpdatedAt = new Date();
-                updateState.error = {
-                    message: 'Update timed out',
-                    details: `No updates for ${Math.round(timeSinceUpdate / 1000 / 60)} minutes`
-                };
-                await updateState.save();
             }
+        }
+        
+        // If we triggered an update, include that in the response
+        if (updateTriggered) {
+            response.metadata.updateTriggered = true;
         }
         
         res.json(response);

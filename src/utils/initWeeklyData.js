@@ -46,18 +46,22 @@ async function initWeeklyData() {
       }
     }
 
-    // Start the weekly data update
+    // Start the weekly data update using the new method that fetches all data at once
     console.log('Starting weekly teleporter data update...');
-    const result = await teleporterService.updateWeeklyTeleporterData();
+    const result = await teleporterService.fetchWeeklyTeleporterDataAtOnce();
     
-    console.log('Weekly data update initiated:', result);
+    console.log('Weekly data update completed:', {
+      success: result.success,
+      messageCount: result.messageCount,
+      totalMessages: result.totalMessages
+    });
     
   } catch (error) {
     console.error('Error:', error);
   } finally {
-    // Don't disconnect from the database as the update is running in the background
-    console.log('Weekly data update is running in the background. Do not close this process until it completes.');
-    console.log('Check the logs for progress updates.');
+    // Disconnect from the database when done
+    await mongoose.disconnect();
+    console.log('Disconnected from MongoDB');
   }
 }
 
