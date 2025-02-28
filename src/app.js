@@ -16,6 +16,8 @@ const Chain = require('./models/chain');
 const chainService = require('./services/chainService');
 const tpsRoutes = require('./routes/tpsRoutes');
 const tpsService = require('./services/tpsService');
+const TPS = require('./models/tps');
+const teleporterRoutes = require('./routes/teleporterRoutes');
 const logger = require('./utils/logger');
 
 const app = express();
@@ -94,6 +96,11 @@ const initializeDataUpdates = async () => {
       timestamp: new Date().toISOString()
     });
 
+    // Initial teleporter data update
+    logger.info('Updating initial teleporter data...');
+    const teleporterService = require('./services/teleporterService');
+    await teleporterService.updateTeleporterData();
+
   } catch (error) {
     logger.error('Initialization error:', error);
   }
@@ -125,6 +132,75 @@ const initializeDataUpdates = async () => {
       logger.info(`[CRON] Updated ${chains.length} chains with TPS data`);
     } catch (error) {
       logger.error('[CRON] Chain/TPS update failed:', error);
+    }
+  });
+
+  // Teleporter data updates every hour
+  cron.schedule(config.cron.teleporterUpdate, async () => {
+    try {
+      logger.info(`[CRON] Starting scheduled teleporter update at ${new Date().toISOString()}`);
+      const teleporterService = require('./services/teleporterService');
+      await teleporterService.updateTeleporterData();
+      logger.info('[CRON] Teleporter update completed');
+    } catch (error) {
+      logger.error('[CRON] Teleporter update failed:', error);
+    }
+  });
+
+  // Weekly teleporter data updates once a day
+  cron.schedule('0 0 * * *', async () => {
+    try {
+      logger.info(`[CRON] Starting scheduled weekly teleporter update at ${new Date().toISOString()}`);
+      const teleporterService = require('./services/teleporterService');
+      
+      // Check if there's already an update in progress
+      const { TeleporterUpdateState, TeleporterMessage } = require('./models/teleporterMessage');
+      const existingUpdate = await TeleporterUpdateState.findOne({ 
+        updateType: 'weekly',
+        state: 'in_progress'
+      });
+      
+      if (existingUpdate) {
+        // Check if it's stale
+        const lastUpdated = new Date(existingUpdate.lastUpdatedAt);
+        const timeSinceUpdate = new Date().getTime() - lastUpdated.getTime();
+        
+        if (timeSinceUpdate > 5 * 60 * 1000) { // 5 minutes
+          logger.warn('[CRON] Found stale weekly update, resetting it...', {
+            lastUpdated: lastUpdated.toISOString(),
+            timeSinceUpdateMs: timeSinceUpdate
+          });
+          
+          existingUpdate.state = 'failed';
+          existingUpdate.lastUpdatedAt = new Date();
+          existingUpdate.error = {
+            message: 'Update timed out',
+            details: `No updates for ${Math.round(timeSinceUpdate / 1000 / 60)} minutes`
+          };
+          await existingUpdate.save();
+        } else {
+          logger.info('[CRON] Weekly update already in progress, skipping...', {
+            startedAt: existingUpdate.startedAt,
+            lastUpdatedAt: existingUpdate.lastUpdatedAt,
+            progress: existingUpdate.progress
+          });
+          return;
+        }
+      }
+      
+      // Check if we have any weekly data
+      const anyWeeklyData = await TeleporterMessage.findOne({ dataType: 'weekly' });
+      
+      // If no data exists, log a special message
+      if (!anyWeeklyData) {
+        logger.info('[CRON] No weekly teleporter data found, initializing for the first time');
+      }
+      
+      // Start the update
+      await teleporterService.updateWeeklyTeleporterData();
+      logger.info('[CRON] Weekly teleporter update completed');
+    } catch (error) {
+      logger.error('[CRON] Weekly teleporter update failed:', error);
     }
   });
 
@@ -178,6 +254,7 @@ connectDB().then(() => {
 app.use('/api', chainRoutes);
 app.use('/api', tvlRoutes);
 app.use('/api', tpsRoutes);
+app.use('/api', teleporterRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

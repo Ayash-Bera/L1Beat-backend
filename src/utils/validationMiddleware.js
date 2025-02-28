@@ -62,7 +62,13 @@ const validators = {
   // TVL routes
   getTvlHistory: [
     validationRules.days
-  ]
+  ],
+  
+  // Teleporter routes
+  getDailyCrossChainMessageCount: [],
+  
+  // Weekly teleporter routes
+  getWeeklyCrossChainMessageCount: []
 };
 
 module.exports = {

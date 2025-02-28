@@ -35,7 +35,7 @@ const config = {
   api: {
     glacier: {
       baseUrl: process.env.GLACIER_API_BASE || 'https://glacier-api.avax.network/v1',
-      timeout: parseInt(process.env.GLACIER_API_TIMEOUT || '10000')
+      timeout: parseInt(process.env.GLACIER_API_TIMEOUT || '30000')
     },
     popsicle: {
       baseUrl: process.env.POPSICLE_API_BASE || 'https://popsicle-api.avax.network/v1',
@@ -78,14 +78,16 @@ const config = {
   cron: {
     tvlUpdate: '*/30 * * * *', // Every 30 minutes
     chainUpdate: '0 * * * *',   // Every hour
-    tpsVerification: '*/15 * * * *' // Every 15 minutes
+    tpsVerification: '*/15 * * * *', // Every 15 minutes
+    teleporterUpdate: '0 * * * *' // Every hour
   },
   
   // Cache TTLs (in milliseconds)
   cache: {
     chains: 5 * 60 * 1000,      // 5 minutes
     tvlHistory: 15 * 60 * 1000, // 15 minutes
-    tps: 5 * 60 * 1000          // 5 minutes
+    tps: 5 * 60 * 1000,         // 5 minutes
+    teleporter: 5 * 60 * 1000   // 5 minutes
   }
 };
 
