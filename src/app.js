@@ -328,7 +328,6 @@ const PORT = process.env.PORT || 5001;
 // Check for required environment variables before starting
 const requiredEnvVars = [
   'GLACIER_API_BASE',
-  'POPSICLE_API_BASE',
   'DEFILLAMA_API_BASE',
   'METRICS_API_BASE'
 ];

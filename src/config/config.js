@@ -37,10 +37,6 @@ const config = {
       baseUrl: process.env.GLACIER_API_BASE,
       timeout: parseInt(process.env.GLACIER_API_TIMEOUT || '30000')
     },
-    popsicle: {
-      baseUrl: process.env.POPSICLE_API_BASE,
-      timeout: parseInt(process.env.POPSICLE_API_TIMEOUT || '15000')
-    },
     defillama: {
       baseUrl: process.env.DEFILLAMA_API_BASE,
       timeout: parseInt(process.env.DEFILLAMA_API_TIMEOUT || '30000')
