@@ -325,6 +325,22 @@ app.options('*', cors());
 
 const PORT = process.env.PORT || 5001;
 
+// Check for required environment variables before starting
+const requiredEnvVars = [
+  'GLACIER_API_BASE',
+  'POPSICLE_API_BASE',
+  'DEFILLAMA_API_BASE'
+];
+
+const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+if (missingEnvVars.length > 0) {
+  logger.error('Missing required environment variables:', { 
+    missing: missingEnvVars.join(', ')
+  });
+  logger.error('Please check your .env file and make sure these variables are set.');
+  // Still allow the server to start (for development convenience)
+}
+
 // For Vercel, we need to export the app
 module.exports = app;
 

@@ -34,15 +34,15 @@ const config = {
   // External APIs
   api: {
     glacier: {
-      baseUrl: process.env.GLACIER_API_BASE || 'https://glacier-api.avax.network/v1',
+      baseUrl: process.env.GLACIER_API_BASE,
       timeout: parseInt(process.env.GLACIER_API_TIMEOUT || '30000')
     },
     popsicle: {
-      baseUrl: process.env.POPSICLE_API_BASE || 'https://popsicle-api.avax.network/v1',
+      baseUrl: process.env.POPSICLE_API_BASE,
       timeout: parseInt(process.env.POPSICLE_API_TIMEOUT || '15000')
     },
     defillama: {
-      baseUrl: process.env.DEFILLAMA_API_BASE || 'https://api.llama.fi/v2',
+      baseUrl: process.env.DEFILLAMA_API_BASE,
       timeout: parseInt(process.env.DEFILLAMA_API_TIMEOUT || '30000')
     }
   },
