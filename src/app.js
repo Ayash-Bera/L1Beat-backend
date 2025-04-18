@@ -329,7 +329,8 @@ const PORT = process.env.PORT || 5001;
 const requiredEnvVars = [
   'GLACIER_API_BASE',
   'POPSICLE_API_BASE',
-  'DEFILLAMA_API_BASE'
+  'DEFILLAMA_API_BASE',
+  'METRICS_API_BASE'
 ];
 
 const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);

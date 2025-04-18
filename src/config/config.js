@@ -44,13 +44,19 @@ const config = {
     defillama: {
       baseUrl: process.env.DEFILLAMA_API_BASE,
       timeout: parseInt(process.env.DEFILLAMA_API_TIMEOUT || '30000')
+    },
+    metrics: {
+      baseUrl: process.env.METRICS_API_BASE,
+      timeout: parseInt(process.env.METRICS_API_TIMEOUT || '30000')
     }
   },
   
   // CORS
   cors: {
-    origin: '*',
-    credentials: false,
+    origin: process.env.NODE_ENV === 'development' 
+      ? ['http://localhost:5173', 'http://localhost:4173'] 
+      : ['https://l1beat.io', 'https://www.l1beat.io', 'http://localhost:4173', 'http://localhost:5173'],
+    credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: [
       'Content-Type', 

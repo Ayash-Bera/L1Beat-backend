@@ -1,15 +1,22 @@
 const TPS = require('../models/tps');
 const axios = require('axios');
 const Chain = require('../models/chain');
+const config = require('../config/config');
+const logger = require('../utils/logger');
 
 class TpsService {
   async updateTpsData(chainId, retryCount = 3) {
     for (let attempt = 1; attempt <= retryCount; attempt++) {
       try {
-        console.log(`[TPS Update] Starting update for chain ${chainId} (Attempt ${attempt}/${retryCount})`);
+        logger.info(`[TPS Update] Starting update for chain ${chainId} (Attempt ${attempt}/${retryCount})`);
         
-        const response = await axios.get(`https://popsicle-api.avax.network/v1/avg_tps/${chainId}`, {
-          timeout: 15000,
+        // Use the new metrics API endpoint
+        const response = await axios.get(`${config.api.metrics.baseUrl}/chains/${chainId}/metrics/avgTps`, {
+          params: {
+            timeInterval: 'day',
+            pageSize: 30
+          },
+          timeout: config.api.metrics.timeout,
           headers: {
             'Accept': 'application/json',
             'User-Agent': 'l1beat-backend'
@@ -18,12 +25,12 @@ class TpsService {
 
         // Enhanced error logging
         if (!response.data) {
-          console.warn(`[TPS Update] No data in response for chain ${chainId}`);
+          logger.warn(`[TPS Update] No data in response for chain ${chainId}`);
           continue;
         }
 
         if (!Array.isArray(response.data.results)) {
-          console.warn(`[TPS Update] Invalid response format for chain ${chainId}:`, response.data);
+          logger.warn(`[TPS Update] Invalid response format for chain ${chainId}:`, response.data);
           continue;
         }
 
@@ -31,7 +38,7 @@ class TpsService {
         const thirtyDaysAgo = currentTime - (30 * 24 * 60 * 60);
 
         // Log raw data before filtering
-        console.log(`[TPS Update] Raw data for chain ${chainId}:`, {
+        logger.info(`[TPS Update] Raw data for chain ${chainId}:`, {
           resultsCount: response.data.results.length,
           sampleData: response.data.results[0],
           environment: process.env.NODE_ENV
@@ -43,13 +50,13 @@ class TpsService {
           const value = parseFloat(item.value);
           
           if (isNaN(timestamp) || isNaN(value)) {
-            console.warn(`[TPS Update] Invalid data point for chain ${chainId}:`, item);
+            logger.warn(`[TPS Update] Invalid data point for chain ${chainId}:`, item);
             return false;
           }
           
           const isValid = timestamp >= thirtyDaysAgo && timestamp <= currentTime;
           if (!isValid) {
-            console.warn(`[TPS Update] Out of range timestamp for chain ${chainId}:`, {
+            logger.warn(`[TPS Update] Out of range timestamp for chain ${chainId}:`, {
               timestamp: new Date(timestamp * 1000).toISOString(),
               value
             });
@@ -79,7 +86,7 @@ class TpsService {
             { ordered: false } // Continue processing even if some operations fail
           );
 
-          console.log(`[TPS Update] Success for chain ${chainId}:`, {
+          logger.info(`[TPS Update] Success for chain ${chainId}:`, {
             validDataPoints: validTpsData.length,
             matched: result.matchedCount,
             modified: result.modifiedCount,
@@ -90,11 +97,11 @@ class TpsService {
           return result;
         }
 
-        console.warn(`[TPS Update] No valid data points for chain ${chainId}`);
+        logger.warn(`[TPS Update] No valid data points for chain ${chainId}`);
         return null;
 
       } catch (error) {
-        console.error(`[TPS Update] Error for chain ${chainId} (Attempt ${attempt}/${retryCount}):`, {
+        logger.error(`[TPS Update] Error for chain ${chainId} (Attempt ${attempt}/${retryCount}):`, {
           message: error.message,
           status: error.response?.status,
           data: error.response?.data,
@@ -103,7 +110,7 @@ class TpsService {
 
         if (attempt === retryCount) {
           // On final attempt, log but don't throw
-          console.error(`[TPS Update] All attempts failed for chain ${chainId}`);
+          logger.error(`[TPS Update] All attempts failed for chain ${chainId}`);
           return null;
         }
 
@@ -119,7 +126,7 @@ class TpsService {
       const existingData = await TPS.countDocuments({ chainId });
       
       if (existingData === 0) {
-        console.log(`No TPS history found for chain ${chainId}, fetching from API...`);
+        logger.info(`No TPS history found for chain ${chainId}, fetching from API...`);
         await this.updateTpsData(chainId);
       }
 
@@ -133,9 +140,10 @@ class TpsService {
         .select('-_id timestamp value')
         .lean();
       
-      console.log(`Found ${data.length} TPS records for chain ${chainId}`);
+      logger.info(`Found ${data.length} TPS records for chain ${chainId}`);
       return data;
     } catch (error) {
+      logger.error(`Error fetching TPS history: ${error.message}`);
       throw new Error(`Error fetching TPS history: ${error.message}`);
     }
   }
@@ -148,7 +156,7 @@ class TpsService {
         .lean();
 
       if (!latest) {
-        console.log(`No TPS data found for chain ${chainId}, fetching from API...`);
+        logger.info(`No TPS data found for chain ${chainId}, fetching from API...`);
         await this.updateTpsData(chainId);
         latest = await TPS.findOne({ chainId })
           .sort({ timestamp: -1 })
@@ -158,6 +166,7 @@ class TpsService {
       
       return latest;
     } catch (error) {
+      logger.error(`Error fetching latest TPS: ${error.message}`);
       throw new Error(`Error fetching latest TPS: ${error.message}`);
     }
   }
@@ -170,7 +179,7 @@ class TpsService {
       const oneDayAgo = currentTime - (24 * 60 * 60);
 
       // Add more detailed initial logging
-      console.log('Network TPS calculation - Time boundaries:', {
+      logger.info('Network TPS calculation - Time boundaries:', {
         currentTime: new Date(currentTime * 1000).toISOString(),
         oneDayAgo: new Date(oneDayAgo * 1000).toISOString(),
         currentTimestamp: currentTime,
@@ -182,7 +191,7 @@ class TpsService {
         timestamp: { $gte: oneDayAgo }
       }).lean();
 
-      console.log('All TPS records in last 24h:', {
+      logger.info('All TPS records in last 24h:', {
         count: allTpsRecords.length,
         uniqueChains: [...new Set(allTpsRecords.map(r => r.chainId))].length,
         timeRange: {
@@ -210,7 +219,7 @@ class TpsService {
         const isValid = timestamp >= oneDayAgo && timestamp <= currentTime;
         
         if (!isValid) {
-          console.warn(`Invalid timestamp for chain ${result.chainId}:`, {
+          logger.warn(`Invalid timestamp for chain ${result.chainId}:`, {
             timestamp: new Date(timestamp * 1000).toISOString(),
             value: result.value
           });
@@ -220,7 +229,7 @@ class TpsService {
       });
 
       // Detailed logging of valid results
-      console.log('Network TPS calculation - Valid Results:', {
+      logger.info('Network TPS calculation - Valid Results:', {
         totalChains: chains.length,
         validResults: validResults.length,
         chainDetails: validResults.map(r => ({
@@ -234,13 +243,13 @@ class TpsService {
       const timestamps = validResults.map(r => r.timestamp);
       const futureTimestamps = timestamps.filter(t => t > currentTime);
       if (futureTimestamps.length > 0) {
-        console.warn('Found future timestamps:', {
+        logger.warn('Found future timestamps:', {
           count: futureTimestamps.length,
           timestamps: futureTimestamps.map(t => new Date(t * 1000).toISOString())
         });
       }
 
-      console.log('Network TPS calculation:', {
+      logger.info('Network TPS calculation:', {
         totalChains: chains.length,
         validResults: validResults.length,
         oldestTimestamp: validResults.length ? new Date(Math.min(...timestamps) * 1000).toISOString() : null,
@@ -265,7 +274,7 @@ class TpsService {
       const dataAge = Math.max(0, Math.floor((currentTime - latestTimestamp) / 60)); // Convert to minutes
 
       if (dataAge > 24 * 60) { // More than 24 hours in minutes
-        console.warn(`TPS data is ${dataAge} minutes old (${(dataAge/60).toFixed(1)} hours)`);
+        logger.warn(`TPS data is ${dataAge} minutes old (${(dataAge/60).toFixed(1)} hours)`);
       }
 
       return {
@@ -278,7 +287,7 @@ class TpsService {
         lastUpdate: new Date(latestTimestamp * 1000).toISOString()
       };
     } catch (error) {
-      console.error('Error calculating network TPS:', error);
+      logger.error('Error calculating network TPS:', error);
       throw error;
     }
   }
@@ -327,9 +336,10 @@ class TpsService {
         date: new Date(point.timestamp * 1000).toISOString()
       }));
 
-      console.log(`Found ${enrichedData.length} historical network TPS records`);
+      logger.info(`Found ${enrichedData.length} historical network TPS records`);
       return enrichedData;
     } catch (error) {
+      logger.error(`Error fetching network TPS history: ${error.message}`);
       throw new Error(`Error fetching network TPS history: ${error.message}`);
     }
   }
