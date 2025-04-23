@@ -96,7 +96,7 @@ class ChainService {
                 return null;
             }
 
-            const validators = await this.fetchValidators(chainData.subnetId);
+            const validators = await this.fetchValidators(chainData.subnetId, chainId);
             
             logger.info(`Chain ${chainId} update details:`, {
                 validatorCount: validators.length,
@@ -131,15 +131,20 @@ class ChainService {
         }
     }
 
-    async fetchValidators(subnetId) {
+    async fetchValidators(subnetId, chainId) {
         try {
-            if (!subnetId) return [];
+            if (!subnetId) {
+                // If no subnetId, try to fetch validators using the alternative method
+                return await this.fetchAlternativeValidators(chainId);
+            }
             
             let allValidators = [];
             let nextPageToken = null;
             
+            // Try first Glacier API endpoint (validators)
             do {
-                const url = new URL(`${config.api.glacier.baseUrl}/networks/mainnet/validators`);
+                const validatorsEndpoint = config.api.glacier.endpoints.validators;
+                const url = new URL(`${config.api.glacier.baseUrl}${validatorsEndpoint}`);
                 url.searchParams.append('subnetId', subnetId);
                 url.searchParams.append('pageSize', '100');
                 url.searchParams.append('validationStatus', 'active');
@@ -148,23 +153,152 @@ class ChainService {
                     url.searchParams.append('pageToken', nextPageToken);
                 }
 
+                logger.debug(`Fetching validators from primary endpoint: ${url.toString()}`);
                 const response = await fetch(url.toString());
                 if (!response.ok) {
-                    throw new Error(`API request failed with status ${response.status}`);
+                    logger.warn(`Primary Glacier API request failed for subnet ${subnetId}, trying L1Validators endpoint`);
+                    break; // Exit loop and try secondary endpoint
                 }
 
                 const data = await response.json();
                 allValidators = [...allValidators, ...data.validators];
                 nextPageToken = data.nextPageToken;
                 
-                logger.debug(`Fetched ${data.validators.length} validators. Next page token: ${nextPageToken}`);
+                logger.debug(`Fetched ${data.validators.length} validators from primary endpoint. Next page token: ${nextPageToken}`);
             } while (nextPageToken);
 
-            logger.info(`Total validators fetched: ${allValidators.length}`);
+            // If no validators found from primary endpoint, try L1Validators endpoint
+            if (allValidators.length === 0) {
+                logger.info(`No validators found from primary endpoint for subnet ${subnetId}, trying L1Validators endpoint`);
+                
+                // Try L1Validators endpoint with subnetId parameter
+                try {
+                    const l1ValidatorsEndpoint = config.api.glacier.endpoints.l1Validators;
+                    const secondaryUrl = new URL(`${config.api.glacier.baseUrl}${l1ValidatorsEndpoint}`);
+                    secondaryUrl.searchParams.append('subnetId', subnetId);
+                    secondaryUrl.searchParams.append('pageSize', '100');
+                    
+                    logger.debug(`Fetching validators from L1Validators endpoint: ${secondaryUrl.toString()}`);
+                    const response = await fetch(secondaryUrl.toString());
+                    if (!response.ok) {
+                        throw new Error(`L1Validators API request failed with status ${response.status}`);
+                    }
+                    
+                    const data = await response.json();
+                    
+                    // L1Validators response format is different, so we need to transform it
+                    const transformedValidators = (data.validators || []).map(v => ({
+                        nodeId: v.nodeId || '',
+                        txHash: v.validationId || v.validationIdHex || '',
+                        amountStaked: v.weight ? v.weight.toString() : '0',
+                        startTimestamp: v.creationTimestamp || 0,
+                        endTimestamp: 0, // End timestamp might not be available
+                        validationStatus: 'active',
+                        uptimePerformance: 100, // Default value
+                        avalancheGoVersion: '' // Not available in this endpoint
+                    }));
+                    
+                    allValidators = transformedValidators;
+                    
+                    logger.info(`Fetched ${allValidators.length} validators from L1Validators endpoint`);
+                    
+                    // If there's a nextPageToken, we should handle pagination for L1Validators too
+                    let l1NextPageToken = data.nextPageToken;
+                    
+                    while (l1NextPageToken) {
+                        const nextPageUrl = new URL(`${config.api.glacier.baseUrl}${l1ValidatorsEndpoint}`);
+                        nextPageUrl.searchParams.append('subnetId', subnetId);
+                        nextPageUrl.searchParams.append('pageSize', '100');
+                        nextPageUrl.searchParams.append('pageToken', l1NextPageToken);
+                        
+                        const nextPageResponse = await fetch(nextPageUrl.toString());
+                        if (!nextPageResponse.ok) {
+                            logger.warn(`Failed to fetch next page of L1Validators, status: ${nextPageResponse.status}`);
+                            break;
+                        }
+                        
+                        const nextPageData = await nextPageResponse.json();
+                        
+                        const nextPageValidators = (nextPageData.validators || []).map(v => ({
+                            nodeId: v.nodeId || '',
+                            txHash: v.validationId || v.validationIdHex || '',
+                            amountStaked: v.weight ? v.weight.toString() : '0',
+                            startTimestamp: v.creationTimestamp || 0,
+                            endTimestamp: 0,
+                            validationStatus: 'active',
+                            uptimePerformance: 100,
+                            avalancheGoVersion: ''
+                        }));
+                        
+                        allValidators = [...allValidators, ...nextPageValidators];
+                        l1NextPageToken = nextPageData.nextPageToken;
+                        
+                        logger.debug(`Fetched ${nextPageValidators.length} additional validators from L1Validators endpoint. Next page token: ${l1NextPageToken}`);
+                    }
+                } catch (secondaryError) {
+                    logger.error(`Error fetching validators from L1Validators endpoint for subnet ${subnetId}:`, 
+                        { error: secondaryError.message });
+                    
+                    // If L1Validators endpoint also fails, try alternative validator source
+                    return await this.fetchAlternativeValidators(chainId);
+                }
+            }
+
+            logger.info(`Total validators fetched for chain ${chainId}: ${allValidators.length}`);
             return allValidators;
             
         } catch (error) {
             logger.error(`Error fetching validators for subnet ${subnetId}:`, { error: error.message });
+            // If any error occurs, try the alternative method
+            return await this.fetchAlternativeValidators(chainId);
+        }
+    }
+
+    async fetchAlternativeValidators(chainId) {
+        if (!chainId) return [];
+        
+        try {
+            // Get the alternative validator endpoints from configuration
+            const alternativeValidatorEndpoints = config.api.alternativeValidators || {};
+
+            // Check if we have an alternative endpoint for this chain
+            if (!alternativeValidatorEndpoints[chainId]) {
+                logger.info(`No alternative validator endpoint configured for chain ${chainId}`);
+                return [];
+            }
+
+            logger.info(`Fetching validators from alternative endpoint for chain ${chainId}`);
+            const response = await fetch(alternativeValidatorEndpoints[chainId], {
+                timeout: config.api.glacier.timeout // Use the same timeout as Glacier API
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Alternative API request failed with status ${response.status}`);
+            }
+
+            const data = await response.json();
+            
+            // Process response according to the expected format
+            // This may need to be customized based on the response format of each alternative API
+            const validators = Array.isArray(data.validators) ? data.validators : 
+                              Array.isArray(data) ? data : [];
+            
+            logger.info(`Total validators fetched from alternative endpoint: ${validators.length}`);
+            
+            // Transform the data to match the expected format if necessary
+            return validators.map(v => ({
+                nodeId: v.nodeId || v.id || '',
+                txHash: v.txHash || '',
+                amountStaked: v.amountStaked || v.stake || '0',
+                startTimestamp: v.startTimestamp || v.start || 0,
+                endTimestamp: v.endTimestamp || v.end || 0,
+                validationStatus: v.validationStatus || 'active',
+                uptimePerformance: v.uptimePerformance || 100,
+                avalancheGoVersion: v.avalancheGoVersion || ''
+            }));
+            
+        } catch (error) {
+            logger.error(`Error fetching alternative validators for chain ${chainId}:`, { error: error.message });
             return [];
         }
     }
@@ -173,6 +307,40 @@ class ChainService {
     clearUpdateTracking() {
         this.lastUpdated.clear();
         logger.info('Cleared all chain update tracking');
+    }
+
+    // Update only the validators for a specific chain
+    async updateValidatorsOnly(chainId, validators) {
+        try {
+            if (!chainId) {
+                throw new Error('Chain ID is required');
+            }
+
+            logger.info(`Updating validators only for chain ${chainId}`);
+            
+            const updatedChain = await Chain.findOneAndUpdate(
+                { chainId },
+                {
+                    validators,
+                    lastUpdated: new Date()
+                },
+                { new: true }
+            );
+
+            if (!updatedChain) {
+                throw new Error('Chain not found');
+            }
+            
+            // Invalidate cache for this chain
+            cacheManager.delete(`chain_${chainId}`);
+            cacheManager.delete('all_chains');
+            
+            logger.info(`Updated ${updatedChain.validators.length} validators for chain ${chainId}`);
+            return updatedChain;
+        } catch (error) {
+            logger.error(`Error updating validators for chain ${chainId}:`, { error: error.message });
+            throw error;
+        }
     }
 }
 

@@ -4,121 +4,210 @@ const Chain = require('../models/chain');
 const config = require('../config/config');
 const logger = require('../utils/logger');
 
-class TpsService {
-  async updateTpsData(chainId, retryCount = 3) {
-    for (let attempt = 1; attempt <= retryCount; attempt++) {
-      try {
-        logger.info(`[TPS Update] Starting update for chain ${chainId} (Attempt ${attempt}/${retryCount})`);
+// Rate limiter implementation
+class RateLimiter {
+  constructor(maxRequestsPerMinute = 30) {
+    this.queue = [];
+    this.processing = false;
+    this.maxRequestsPerMinute = maxRequestsPerMinute;
+    this.requestTimestamps = [];
+  }
+
+  // Add a request to the queue
+  async enqueue(fn) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ fn, resolve, reject });
+      this.processQueue();
+    });
+  }
+
+  // Process the queue
+  async processQueue() {
+    if (this.processing || this.queue.length === 0) return;
+    
+    this.processing = true;
+    
+    try {
+      // Check if we've exceeded rate limit
+      const now = Date.now();
+      this.requestTimestamps = this.requestTimestamps.filter(
+        timestamp => now - timestamp < 60000 // Keep only timestamps from the last minute
+      );
+      
+      if (this.requestTimestamps.length >= this.maxRequestsPerMinute) {
+        // We've hit the rate limit, wait until we can make another request
+        const oldestTimestamp = this.requestTimestamps[0];
+        const timeToWait = 60000 - (now - oldestTimestamp);
         
-        // Use the new metrics API endpoint
-        const response = await axios.get(`${config.api.metrics.baseUrl}/chains/${chainId}/metrics/avgTps`, {
-          params: {
-            timeInterval: 'day',
-            pageSize: 30
-          },
-          timeout: config.api.metrics.timeout,
-          headers: {
-            'Accept': 'application/json',
-            'User-Agent': 'l1beat-backend'
-          }
-        });
+        logger.info(`Rate limit reached, waiting ${Math.round(timeToWait/1000)}s before next request`);
+        
+        setTimeout(() => {
+          this.processing = false;
+          this.processQueue();
+        }, timeToWait + 100); // Add a small buffer
+        
+        return;
+      }
+      
+      // Process the next item in the queue
+      const item = this.queue.shift();
+      this.requestTimestamps.push(now);
+      
+      try {
+        const result = await item.fn();
+        item.resolve(result);
+      } catch (error) {
+        item.reject(error);
+      }
+      
+      // Small delay between requests
+      setTimeout(() => {
+        this.processing = false;
+        this.processQueue();
+      }, 300); // 300ms between requests
+    } catch (error) {
+      logger.error('Error in rate limiter:', error);
+      this.processing = false;
+    }
+  }
+}
 
-        // Enhanced error logging
-        if (!response.data) {
-          logger.warn(`[TPS Update] No data in response for chain ${chainId}`);
-          continue;
-        }
+// Create a global rate limiter instance
+const metricsApiRateLimiter = new RateLimiter(config.api.metrics.rateLimit.requestsPerMinute || 20);
 
-        if (!Array.isArray(response.data.results)) {
-          logger.warn(`[TPS Update] Invalid response format for chain ${chainId}:`, response.data);
-          continue;
-        }
-
-        const currentTime = Math.floor(Date.now() / 1000);
-        const thirtyDaysAgo = currentTime - (30 * 24 * 60 * 60);
-
-        // Log raw data before filtering
-        logger.info(`[TPS Update] Raw data for chain ${chainId}:`, {
-          resultsCount: response.data.results.length,
-          sampleData: response.data.results[0],
-          environment: process.env.NODE_ENV
-        });
-
-        // Validate and filter TPS data
-        const validTpsData = response.data.results.filter(item => {
-          const timestamp = Number(item.timestamp);
-          const value = parseFloat(item.value);
+class TpsService {
+  async updateTpsData(chainId, retryCount = config.api.metrics.rateLimit.maxRetries || 3, initialBackoffMs = config.api.metrics.rateLimit.retryDelay || 2000) {
+    // Use rate limiter for all API calls
+    return metricsApiRateLimiter.enqueue(async () => {
+      for (let attempt = 1; attempt <= retryCount; attempt++) {
+        try {
+          logger.info(`[TPS Update] Starting update for chain ${chainId} (Attempt ${attempt}/${retryCount})`);
           
-          if (isNaN(timestamp) || isNaN(value)) {
-            logger.warn(`[TPS Update] Invalid data point for chain ${chainId}:`, item);
-            return false;
-          }
-          
-          const isValid = timestamp >= thirtyDaysAgo && timestamp <= currentTime;
-          if (!isValid) {
-            logger.warn(`[TPS Update] Out of range timestamp for chain ${chainId}:`, {
-              timestamp: new Date(timestamp * 1000).toISOString(),
-              value
-            });
-          }
-          
-          return isValid;
-        });
+          // Use the new metrics API endpoint
+          const response = await axios.get(`${config.api.metrics.baseUrl}/chains/${chainId}/metrics/avgTps`, {
+            params: {
+              timeInterval: 'day',
+              pageSize: 30
+            },
+            timeout: config.api.metrics.timeout,
+            headers: {
+              'Accept': 'application/json',
+              'User-Agent': 'l1beat-backend',
+              'Cache-Control': 'no-cache' // Avoid cached responses
+            }
+          });
 
-        // If we have valid data, proceed with update
-        if (validTpsData.length > 0) {
-          const result = await TPS.bulkWrite(
-            validTpsData.map(item => ({
-              updateOne: {
-                filter: { 
-                  chainId: chainId,
-                  timestamp: Number(item.timestamp)
-                },
-                update: { 
-                  $set: { 
-                    value: parseFloat(item.value),
-                    lastUpdated: new Date() 
-                  }
-                },
-                upsert: true
-              }
-            })),
-            { ordered: false } // Continue processing even if some operations fail
-          );
+          // Enhanced error logging
+          if (!response.data) {
+            logger.warn(`[TPS Update] No data in response for chain ${chainId}`);
+            continue;
+          }
 
-          logger.info(`[TPS Update] Success for chain ${chainId}:`, {
-            validDataPoints: validTpsData.length,
-            matched: result.matchedCount,
-            modified: result.modifiedCount,
-            upserted: result.upsertedCount,
+          if (!Array.isArray(response.data.results)) {
+            logger.warn(`[TPS Update] Invalid response format for chain ${chainId}:`, response.data);
+            continue;
+          }
+
+          const currentTime = Math.floor(Date.now() / 1000);
+          const thirtyDaysAgo = currentTime - (30 * 24 * 60 * 60);
+
+          // Log raw data before filtering
+          logger.info(`[TPS Update] Raw data for chain ${chainId}:`, {
+            resultsCount: response.data.results.length,
+            sampleData: response.data.results[0],
             environment: process.env.NODE_ENV
           });
 
-          return result;
-        }
+          // Validate and filter TPS data
+          const validTpsData = response.data.results.filter(item => {
+            const timestamp = Number(item.timestamp);
+            const value = parseFloat(item.value);
+            
+            if (isNaN(timestamp) || isNaN(value)) {
+              logger.warn(`[TPS Update] Invalid data point for chain ${chainId}:`, item);
+              return false;
+            }
+            
+            const isValid = timestamp >= thirtyDaysAgo && timestamp <= currentTime;
+            if (!isValid) {
+              logger.warn(`[TPS Update] Out of range timestamp for chain ${chainId}:`, {
+                timestamp: new Date(timestamp * 1000).toISOString(),
+                value
+              });
+            }
+            
+            return isValid;
+          });
 
-        logger.warn(`[TPS Update] No valid data points for chain ${chainId}`);
-        return null;
+          // If we have valid data, proceed with update
+          if (validTpsData.length > 0) {
+            const result = await TPS.bulkWrite(
+              validTpsData.map(item => ({
+                updateOne: {
+                  filter: { 
+                    chainId: chainId,
+                    timestamp: Number(item.timestamp)
+                  },
+                  update: { 
+                    $set: { 
+                      value: parseFloat(item.value),
+                      lastUpdated: new Date() 
+                    }
+                  },
+                  upsert: true
+                }
+              })),
+              { ordered: false } // Continue processing even if some operations fail
+            );
 
-      } catch (error) {
-        logger.error(`[TPS Update] Error for chain ${chainId} (Attempt ${attempt}/${retryCount}):`, {
-          message: error.message,
-          status: error.response?.status,
-          data: error.response?.data,
-          stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-        });
+            logger.info(`[TPS Update] Success for chain ${chainId}:`, {
+              validDataPoints: validTpsData.length,
+              matched: result.matchedCount,
+              modified: result.modifiedCount,
+              upserted: result.upsertedCount,
+              environment: process.env.NODE_ENV
+            });
 
-        if (attempt === retryCount) {
-          // On final attempt, log but don't throw
-          logger.error(`[TPS Update] All attempts failed for chain ${chainId}`);
+            return result;
+          }
+
+          logger.warn(`[TPS Update] No valid data points for chain ${chainId}`);
           return null;
-        }
 
-        // Wait before retry
-        await new Promise(resolve => setTimeout(resolve, attempt * 2000));
+        } catch (error) {
+          const status = error.response?.status;
+          logger.error(`[TPS Update] Error for chain ${chainId} (Attempt ${attempt}/${retryCount}):`, {
+            message: error.message,
+            status: status,
+            data: error.response?.data,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+          });
+
+          // Special handling for rate limiting
+          if (status === 429) {
+            logger.warn(`[TPS Update] Rate limit exceeded for metrics API, backing off...`);
+            
+            if (attempt < retryCount) {
+              // Exponential backoff with jitter for rate limit errors
+              const backoffTime = initialBackoffMs * Math.pow(2, attempt - 1) * (0.75 + Math.random() * 0.5);
+              logger.info(`[TPS Update] Will retry after ${Math.round(backoffTime/1000)}s`);
+              await new Promise(resolve => setTimeout(resolve, backoffTime));
+            }
+          } else if (attempt < retryCount) {
+            // Normal retry for other errors, with shorter backoff
+            const backoffTime = initialBackoffMs * (attempt - 1) * (0.75 + Math.random() * 0.5);
+            await new Promise(resolve => setTimeout(resolve, backoffTime));
+          }
+
+          if (attempt === retryCount) {
+            // On final attempt, log but don't throw
+            logger.error(`[TPS Update] All attempts failed for chain ${chainId}`);
+            return null;
+          }
+        }
       }
-    }
-    return null;
+      return null;
+    });
   }
 
   async getTpsHistory(chainId, days = 30) {

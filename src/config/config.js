@@ -35,7 +35,11 @@ const config = {
   api: {
     glacier: {
       baseUrl: process.env.GLACIER_API_BASE,
-      timeout: parseInt(process.env.GLACIER_API_TIMEOUT || '30000')
+      timeout: parseInt(process.env.GLACIER_API_TIMEOUT || '30000'),
+      endpoints: {
+        validators: process.env.GLACIER_VALIDATORS_ENDPOINT || '/networks/mainnet/validators',
+        l1Validators: process.env.GLACIER_L1VALIDATORS_ENDPOINT || '/networks/mainnet/l1Validators'
+      }
     },
     defillama: {
       baseUrl: process.env.DEFILLAMA_API_BASE,
@@ -43,7 +47,18 @@ const config = {
     },
     metrics: {
       baseUrl: process.env.METRICS_API_BASE,
-      timeout: parseInt(process.env.METRICS_API_TIMEOUT || '30000')
+      timeout: parseInt(process.env.METRICS_API_TIMEOUT || '30000'),
+      rateLimit: {
+        requestsPerMinute: parseInt(process.env.METRICS_RATE_LIMIT || '20'),
+        retryDelay: parseInt(process.env.METRICS_RETRY_DELAY || '2000'),
+        maxRetries: parseInt(process.env.METRICS_MAX_RETRIES || '3')
+      }
+    },
+    // Alternative validator endpoints for chains that don't use Glacier or need custom endpoints
+    alternativeValidators: {
+      // Define endpoints for specific chains that need alternative validator sources
+      // Format: 'chainId': 'API endpoint URL'
+      // Example: 'mychain': 'https://api.mychain.com/validators'
     }
   },
   
