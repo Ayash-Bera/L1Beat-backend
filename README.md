@@ -57,7 +57,7 @@ A Node.js backend service for the L1Beat, providing API endpoints for Avalanche 
 
 1. Clone the repository:
    ```
-   git clone https://github.com/yourusername/l1beat-backend.git
+   git clone https://github.com/L1Beat/L1Beat-backend.git
    cd l1beat-backend
    ```
 
