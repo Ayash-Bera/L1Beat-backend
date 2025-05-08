@@ -42,16 +42,8 @@ exports.getDailyCrossChainMessageCount = async (req, res) => {
         
         res.json(response);
     } catch (error) {
-        logger.error('Error in getDailyCrossChainMessageCount:', {
-            message: error.message,
-            stack: error.stack
-        });
-        
-        res.status(500).json({ 
-            error: 'Failed to fetch cross-chain message count',
-            message: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-        });
+        logger.error('Error fetching daily cross-chain message count:', { error: error.message });
+        res.status(500).json({ error: 'Failed to fetch daily cross-chain message count' });
     }
 };
 
@@ -207,6 +199,68 @@ exports.getWeeklyCrossChainMessageCount = async (req, res) => {
             error: 'Failed to fetch weekly cross-chain message count',
             message: error.message,
             stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+};
+
+/**
+ * Get historical daily cross-chain message counts for the past N days
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+exports.getHistoricalDailyData = async (req, res) => {
+    try {
+        // Default to 30 days if not specified
+        const days = parseInt(req.query.days || 30);
+        
+        logger.info(`Fetching historical daily cross-chain message counts for the past ${days} days...`);
+        
+        // Call the service method to get historical data
+        const historicalData = await teleporterService.getHistoricalDailyData(days);
+        
+        // Format the response to be consistent with other endpoints
+        const formattedData = historicalData.map(item => {
+            // Convert to plain object if it's a Mongoose document
+            const plainItem = item.toObject ? item.toObject() : item;
+            
+            // Extract date parts for a cleaner display
+            const date = new Date(plainItem.updatedAt);
+            const dateStr = `${date.getFullYear()}-${(date.getMonth()+1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`;
+            
+            // Create a properly formatted data point
+            return {
+                date: plainItem.updatedAt,
+                dateString: dateStr, // Add a clean date string for easier frontend display
+                data: plainItem.messageCounts.map(count => {
+                    // Remove MongoDB _id field from each count
+                    const { _id, ...countData } = count;
+                    return countData;
+                }),
+                totalMessages: plainItem.totalMessages,
+                timeWindow: plainItem.timeWindow
+            };
+        });
+        
+        logger.info(`Historical daily data fetched, found ${formattedData.length} days of data`);
+        
+        // Create response with metadata
+        const response = {
+            data: formattedData,
+            metadata: {
+                requestedDays: days,
+                daysReturned: formattedData.length,
+                updatedAt: new Date()
+            }
+        };
+        
+        res.json(response);
+    } catch (error) {
+        logger.error('Error fetching historical daily cross-chain message counts:', { 
+            error: error.message,
+            stack: error.stack
+        });
+        res.status(500).json({ 
+            error: 'Failed to fetch historical daily cross-chain message counts' 
         });
     }
 }; 

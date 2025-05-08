@@ -68,7 +68,16 @@ const validators = {
   getDailyCrossChainMessageCount: [],
   
   // Weekly teleporter routes
-  getWeeklyCrossChainMessageCount: []
+  getWeeklyCrossChainMessageCount: [],
+  
+  // Historical daily teleporter routes
+  getHistoricalDailyData: [
+    query('days')
+      .optional()
+      .isInt({ min: 1, max: 90 })
+      .withMessage('Days must be an integer between 1 and 90')
+      .toInt()
+  ]
 };
 
 module.exports = {

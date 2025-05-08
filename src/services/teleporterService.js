@@ -1546,6 +1546,60 @@ class TeleporterService {
             throw error;
         }
     }
+
+    /**
+     * Get historical daily teleporter message counts for specified number of days
+     * @param {number} days - Number of days of historical data to fetch (default 30)
+     * @returns {Promise<Array>} Array of historical daily data points
+     */
+    async getHistoricalDailyData(days = 30) {
+        try {
+            logger.info(`Fetching historical daily data for the past ${days} days`);
+            
+            // Query the database for historical records
+            const historicalData = await TeleporterMessage.find({
+                dataType: 'daily'
+            })
+            .sort({ updatedAt: -1 });
+            
+            // If we have at least some data, process it
+            if (historicalData.length > 0) {
+                // Group data by day (YYYY-MM-DD) to handle multiple updates on the same day
+                const groupedByDay = {};
+                
+                historicalData.forEach(record => {
+                    const date = new Date(record.updatedAt);
+                    const dateKey = `${date.getFullYear()}-${(date.getMonth()+1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`;
+                    
+                    // Only keep the most recent entry for each day
+                    if (!groupedByDay[dateKey] || new Date(record.updatedAt) > new Date(groupedByDay[dateKey].updatedAt)) {
+                        groupedByDay[dateKey] = record;
+                    }
+                });
+                
+                // Convert the grouped data back to an array and sort by date (newest first)
+                const uniqueDailyData = Object.values(groupedByDay)
+                    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+                    .slice(0, days); // Limit to requested number of days
+                
+                logger.info(`Found ${uniqueDailyData.length} days of historical teleporter data (from ${historicalData.length} total records)`);
+                return uniqueDailyData;
+            }
+            
+            // If no data found, log a warning and return empty array
+            logger.warn(`No historical daily teleporter data found for the past ${days} days`);
+            return [];
+            
+        } catch (error) {
+            logger.error('Error fetching historical daily teleporter data:', {
+                message: error.message,
+                stack: error.stack
+            });
+            
+            // In case of error, return empty array
+            return [];
+        }
+    }
 }
 
 module.exports = new TeleporterService();

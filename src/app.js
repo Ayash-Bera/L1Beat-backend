@@ -51,8 +51,25 @@ const apiLimiter = rateLimit(config.rateLimit);
 // Apply rate limiting to all API routes
 app.use('/api', apiLimiter);
 
-// CORS configuration with environment-specific settings
-app.use(cors(config.cors));
+// CORS middleware
+if (config.env === 'development') {
+  // Disable CORS entirely in development for easier testing
+  app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    
+    // Handle preflight requests
+    if (req.method === 'OPTIONS') {
+      return res.status(200).end();
+    }
+    
+    next();
+  });
+} else {
+  // Use configured CORS in production
+  app.use(cors(config.cors));
+}
 
 app.use(express.json());
 

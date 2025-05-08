@@ -23,4 +23,14 @@ router.get('/teleporter/messages/weekly-count',
   teleporterController.getWeeklyCrossChainMessageCount
 );
 
+/**
+ * @route   GET /api/teleporter/messages/historical-daily
+ * @desc    Get historical daily cross-chain message counts for the past N days
+ * @access  Public
+ */
+router.get('/teleporter/messages/historical-daily',
+  validate(validators.getHistoricalDailyData),
+  teleporterController.getHistoricalDailyData
+);
+
 module.exports = router; 
