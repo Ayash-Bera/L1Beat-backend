@@ -67,9 +67,6 @@ if (config.env === 'development') {
     
     next();
   });
-} else {
-  // Use configured CORS in production
-  app.use(cors(config.cors));
 }
 
 app.use(express.json());
@@ -258,8 +255,8 @@ const initializeDataUpdates = async () => {
         }).distinct('chainId');
         
         // Get chains with missing or old TxCount data
-        const TxCount = require('./models/txCount');
-        const txCountData = await TxCount.find({
+        const CumulativeTxCount = require('./models/cumulativeTxCount');
+        const txCountData = await CumulativeTxCount.find({
             timestamp: { $gte: oneDayAgo }
         }).distinct('chainId');
 
@@ -370,9 +367,6 @@ app.use('*', (req, res) => {
     path: req.path
   });
 });
-
-// Add OPTIONS handling for preflight requests
-app.options('*', cors());
 
 const PORT = process.env.PORT || 5001;
 
