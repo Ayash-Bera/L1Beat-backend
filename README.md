@@ -142,4 +142,41 @@ The application implements several security measures:
 
 ## License
 
-ISC 
+ISC
+
+## Environment Variables
+
+The following environment variables are required for the application to function properly:
+
+### Server Configuration
+- `PORT` - The port on which the server will run (default: 5001)
+- `HOST` - The host on which the server will run (default: 0.0.0.0)
+- `NODE_ENV` - The environment in which the application is running (development/production)
+
+### Database Configuration
+- `DEV_MONGODB_URI` - MongoDB connection URI for development environment
+- `PROD_MONGODB_URI` - MongoDB connection URI for production environment
+
+### API Keys
+- `GLACIER_API_KEY` - API key for Glacier API with increased rate limits
+
+### External API Configuration
+- `GLACIER_API_BASE` - Base URL for the Glacier API
+- `GLACIER_API_TIMEOUT` - Timeout for Glacier API requests in milliseconds (default: 30000)
+- `GLACIER_VALIDATORS_ENDPOINT` - Endpoint for validators (default: /networks/mainnet/validators)
+- `GLACIER_L1VALIDATORS_ENDPOINT` - Endpoint for L1Validators (default: /networks/mainnet/l1Validators)
+
+- `DEFILLAMA_API_BASE` - Base URL for the DefiLlama API
+- `DEFILLAMA_API_TIMEOUT` - Timeout for DefiLlama API requests in milliseconds (default: 30000)
+
+- `METRICS_API_BASE` - Base URL for the Metrics API
+- `METRICS_API_TIMEOUT` - Timeout for Metrics API requests in milliseconds (default: 30000)
+- `METRICS_RATE_LIMIT` - Rate limit for Metrics API requests per minute (default: 20)
+- `METRICS_RETRY_DELAY` - Delay before retrying Metrics API requests in milliseconds (default: 2000)
+- `METRICS_MAX_RETRIES` - Maximum number of retries for Metrics API requests (default: 3)
+
+### Glacier API Rate Limiting (Optional)
+- `GLACIER_RATE_LIMIT` - Limit for Glacier API requests per minute (default: 10)
+- `GLACIER_RETRY_DELAY` - Initial delay before retrying Glacier API requests in milliseconds (default: 5000)
+- `GLACIER_MAX_RETRIES` - Maximum number of retries for Glacier API requests (default: 5)
+- `GLACIER_MIN_DELAY` - Minimum delay between Glacier API requests in milliseconds (default: 2000) 
