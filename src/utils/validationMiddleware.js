@@ -35,7 +35,7 @@ const validationRules = {
     .optional()
     .isInt({ min: 1, max: 365 })
     .withMessage('Days must be an integer between 1 and 365')
-    .toInt(),
+    .toInt()
 };
 
 // Validation chains for different routes
@@ -77,6 +77,11 @@ const validators = {
       .isInt({ min: 1, max: 90 })
       .withMessage('Days must be an integer between 1 and 90')
       .toInt()
+  ],
+  
+  // Generic chainId parameter validator
+  getChainIdParam: [
+    validationRules.chainId
   ]
 };
 

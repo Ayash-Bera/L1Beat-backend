@@ -17,6 +17,7 @@ const chainService = require('./services/chainService');
 const tpsRoutes = require('./routes/tpsRoutes');
 const tpsService = require('./services/tpsService');
 const TPS = require('./models/tps');
+const cumulativeTxCountRoutes = require('./routes/cumulativeTxCountRoutes');
 const teleporterRoutes = require('./routes/teleporterRoutes');
 const logger = require('./utils/logger');
 
@@ -66,9 +67,6 @@ if (config.env === 'development') {
     
     next();
   });
-} else {
-  // Use configured CORS in production
-  app.use(cors(config.cors));
 }
 
 app.use(express.json());
@@ -88,6 +86,8 @@ const initializeDataUpdates = async () => {
         await chainService.updateChain(chain);
         // Add initial TPS update for each chain
         await tpsService.updateTpsData(chain.chainId);
+        // Add initial Transaction Count update for each chain
+        await tpsService.updateCumulativeTxCount(chain.chainId);
       }
       logger.info(`Updated ${chains.length} chains in database`);
       
@@ -162,10 +162,12 @@ const initializeDataUpdates = async () => {
         await chainService.updateChain(chain);
         // Add TPS update for each chain
         await tpsService.updateTpsData(chain.chainId);
+        // Add Transaction Count update for each chain
+        await tpsService.updateCumulativeTxCount(chain.chainId);
       }
-      logger.info(`[CRON] Updated ${chains.length} chains with TPS data`);
+      logger.info(`[CRON] Updated ${chains.length} chains with TPS and Transaction Count data`);
     } catch (error) {
-      logger.error('[CRON] Chain/TPS update failed:', error);
+      logger.error('[CRON] Chain/TPS/TxCount update failed:', error);
     }
   });
 
@@ -241,7 +243,7 @@ const initializeDataUpdates = async () => {
   // Check TPS data every 15 minutes
   cron.schedule(config.cron.tpsVerification, async () => {
     try {
-        logger.info(`[CRON] Starting TPS verification at ${new Date().toISOString()}`);
+        logger.info(`[CRON] Starting TPS and Transaction Count verification at ${new Date().toISOString()}`);
         
         const currentTime = Math.floor(Date.now() / 1000);
         const oneDayAgo = currentTime - (24 * 60 * 60);
@@ -251,30 +253,58 @@ const initializeDataUpdates = async () => {
         const tpsData = await TPS.find({
             timestamp: { $gte: oneDayAgo }
         }).distinct('chainId');
+        
+        // Get chains with missing or old TxCount data
+        const CumulativeTxCount = require('./models/cumulativeTxCount');
+        const txCountData = await CumulativeTxCount.find({
+            timestamp: { $gte: oneDayAgo }
+        }).distinct('chainId');
 
-        const chainsNeedingUpdate = chains.filter(chain => 
+        const chainsNeedingTpsUpdate = chains.filter(chain => 
             !tpsData.includes(chain.chainId)
         );
+        
+        const chainsNeedingTxCountUpdate = chains.filter(chain => 
+            !txCountData.includes(chain.chainId)
+        );
 
-        if (chainsNeedingUpdate.length > 0) {
-            logger.info(`[CRON] Found ${chainsNeedingUpdate.length} chains needing TPS update`);
+        // Combine the chains needing updates (no duplicates)
+        const uniqueChainsNeedingUpdates = [...new Set([
+            ...chainsNeedingTpsUpdate.map(c => c.chainId),
+            ...chainsNeedingTxCountUpdate.map(c => c.chainId)
+        ])].map(chainId => ({ chainId }));
+
+        if (uniqueChainsNeedingUpdates.length > 0) {
+            logger.info(`[CRON] Found ${uniqueChainsNeedingUpdates.length} chains needing TPS/TxCount update`, {
+                tpsCount: chainsNeedingTpsUpdate.length,
+                txCountCount: chainsNeedingTxCountUpdate.length
+            });
             
             // Update chains in batches
             const BATCH_SIZE = 5;
-            for (let i = 0; i < chainsNeedingUpdate.length; i += BATCH_SIZE) {
-                const batch = chainsNeedingUpdate.slice(i, i + BATCH_SIZE);
+            for (let i = 0; i < uniqueChainsNeedingUpdates.length; i += BATCH_SIZE) {
+                const batch = uniqueChainsNeedingUpdates.slice(i, i + BATCH_SIZE);
                 await Promise.all(
-                    batch.map(chain => tpsService.updateTpsData(chain.chainId))
+                    batch.flatMap(chain => [
+                        // Update TPS if needed
+                        chainsNeedingTpsUpdate.some(c => c.chainId === chain.chainId) 
+                            ? tpsService.updateTpsData(chain.chainId) 
+                            : Promise.resolve(),
+                        // Update TxCount if needed
+                        chainsNeedingTxCountUpdate.some(c => c.chainId === chain.chainId) 
+                            ? tpsService.updateCumulativeTxCount(chain.chainId) 
+                            : Promise.resolve()
+                    ])
                 );
-                if (i + BATCH_SIZE < chainsNeedingUpdate.length) {
+                if (i + BATCH_SIZE < uniqueChainsNeedingUpdates.length) {
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
             }
         }
 
-        logger.info(`[CRON] TPS verification complete at ${new Date().toISOString()}`);
+        logger.info(`[CRON] TPS and Transaction Count verification complete at ${new Date().toISOString()}`);
     } catch (error) {
-        logger.error('[CRON] TPS verification failed:', error);
+        logger.error('[CRON] TPS and Transaction Count verification failed:', error);
     }
   });
 };
@@ -288,6 +318,7 @@ connectDB().then(() => {
 app.use('/api', chainRoutes);
 app.use('/api', tvlRoutes);
 app.use('/api', tpsRoutes);
+app.use('/api', cumulativeTxCountRoutes);
 app.use('/api', teleporterRoutes);
 
 // Health check endpoint
@@ -336,9 +367,6 @@ app.use('*', (req, res) => {
     path: req.path
   });
 });
-
-// Add OPTIONS handling for preflight requests
-app.options('*', cors());
 
 const PORT = process.env.PORT || 5001;
 
