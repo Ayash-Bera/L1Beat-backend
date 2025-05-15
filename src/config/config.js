@@ -109,6 +109,7 @@ const config = {
     chains: 5 * 60 * 1000,      // 5 minutes
     tvlHistory: 15 * 60 * 1000, // 15 minutes
     tps: 5 * 60 * 1000,         // 5 minutes
+    txCount: 5 * 60 * 1000,     // 5 minutes
     teleporter: 5 * 60 * 1000   // 5 minutes
   }
 };
