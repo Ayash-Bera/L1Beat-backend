@@ -35,10 +35,17 @@ const config = {
   api: {
     glacier: {
       baseUrl: process.env.GLACIER_API_BASE,
+      apiKey: process.env.GLACIER_API_KEY, // API key for increased rate limits
       timeout: parseInt(process.env.GLACIER_API_TIMEOUT || '30000'),
       endpoints: {
         validators: process.env.GLACIER_VALIDATORS_ENDPOINT || '/networks/mainnet/validators',
         l1Validators: process.env.GLACIER_L1VALIDATORS_ENDPOINT || '/networks/mainnet/l1Validators'
+      },
+      rateLimit: {
+        requestsPerMinute: parseInt(process.env.GLACIER_RATE_LIMIT || '10'), // Conservative limit by default
+        retryDelay: parseInt(process.env.GLACIER_RETRY_DELAY || '5000'),     // Start with 5s delay
+        maxRetries: parseInt(process.env.GLACIER_MAX_RETRIES || '5'),       // Match the MAX_RETRIES in TeleporterService
+        minDelayBetweenRequests: parseInt(process.env.GLACIER_MIN_DELAY || '2000') // At least 2s between requests
       }
     },
     defillama: {

@@ -8,10 +8,36 @@ class TeleporterService {
     constructor() {
         this.GLACIER_API_BASE = config.api.glacier.baseUrl;
         this.MAX_PAGES = 100; // Increased from 50 to 100 to handle high-volume periods
-        this.MAX_RETRIES = 5; // Increased from 3 to 5 for better handling of timeout issues
-        this.INITIAL_BACKOFF = 5000; // Increased from 3000 to 5000 ms for initial backoff
+        this.MAX_RETRIES = config.api.glacier.rateLimit?.maxRetries || 5; // Use config or fallback to 5
+        this.INITIAL_BACKOFF = config.api.glacier.rateLimit?.retryDelay || 5000; // Use config or fallback to 5000ms
         this.PAGE_SIZE = 50; // Reduced from 100 to 50 to reduce likelihood of timeouts
         this.REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes in milliseconds
+        
+        // Rate limiting properties
+        this.lastRequestTime = 0;
+        this.minDelayBetweenRequests = config.api.glacier.rateLimit?.minDelayBetweenRequests || 2000; // Minimum 2s between requests
+        this.requestsPerMinute = config.api.glacier.rateLimit?.requestsPerMinute || 10; // Default to conservative 10 requests/minute
+        this.requestWindow = 60000; // 1 minute window for rate limiting
+        this.requestCount = 0;
+        this.requestTimestamps = []; // Track request timestamps for sliding window
+        
+        // Log rate limiting configuration 
+        this.logRateLimitConfig();
+    }
+    
+    /**
+     * Log the current rate limit configuration
+     */
+    logRateLimitConfig() {
+        logger.info('Teleporter service initialized with the following Glacier API rate limit configuration:', {
+            service: "l1beat-backend",
+            requestsPerMinute: this.requestsPerMinute,
+            minDelayBetweenRequests: `${this.minDelayBetweenRequests}ms`,
+            maxRetries: this.MAX_RETRIES,
+            initialBackoff: `${this.INITIAL_BACKOFF}ms`,
+            pageSize: this.PAGE_SIZE,
+            timeout: `${config.api.glacier.timeout}ms`
+        });
     }
 
     /**
@@ -21,6 +47,66 @@ class TeleporterService {
      */
     sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+    
+    /**
+     * Throttles API requests to respect rate limits
+     * Uses both a minimum delay between requests and a sliding window rate limit
+     * @returns {Promise<void>}
+     */
+    async throttleRequest() {
+        // Ensure minimum delay between requests
+        const now = Date.now();
+        const timeSinceLastRequest = now - this.lastRequestTime;
+        
+        if (timeSinceLastRequest < this.minDelayBetweenRequests) {
+            const delayNeeded = this.minDelayBetweenRequests - timeSinceLastRequest;
+            logger.info(`Enforcing minimum delay between requests: waiting ${delayNeeded}ms...`, {
+                service: "l1beat-backend"
+            });
+            await this.sleep(delayNeeded);
+        }
+        
+        // Sliding window rate limiting
+        // Remove timestamps older than the window
+        const windowStart = Date.now() - this.requestWindow;
+        const previousLength = this.requestTimestamps.length;
+        this.requestTimestamps = this.requestTimestamps.filter(time => time > windowStart);
+        
+        // Log when requests are leaving the window
+        if (previousLength > this.requestTimestamps.length) {
+            logger.debug(`${previousLength - this.requestTimestamps.length} requests left the rate limit window`, {
+                service: "l1beat-backend"
+            });
+        }
+        
+        // If we've hit the limit, wait until we can make another request
+        if (this.requestTimestamps.length >= this.requestsPerMinute) {
+            // Calculate how long until we can make another request
+            // (when the oldest request leaves the window)
+            const oldestRequest = this.requestTimestamps[0];
+            const timeUntilNextSlot = oldestRequest + this.requestWindow - Date.now();
+            
+            if (timeUntilNextSlot > 0) {
+                logger.info(`Rate limit reached (${this.requestTimestamps.length}/${this.requestsPerMinute} requests in window), waiting ${timeUntilNextSlot}ms...`, {
+                    service: "l1beat-backend",
+                    currentCount: this.requestTimestamps.length,
+                    limit: this.requestsPerMinute,
+                    oldestRequestAge: Math.floor((Date.now() - oldestRequest) / 1000) + 's'
+                });
+                await this.sleep(timeUntilNextSlot);
+            }
+        }
+        
+        // Record this request
+        this.lastRequestTime = Date.now();
+        this.requestTimestamps.push(this.lastRequestTime);
+        
+        // Log current rate limit status
+        logger.info(`Making API request (${this.requestTimestamps.length}/${this.requestsPerMinute} in current window)`, {
+            service: "l1beat-backend",
+            timeRemainingInWindow: Math.floor((this.requestWindow - (Date.now() - this.requestTimestamps[0])) / 1000) + 's'
+        });
     }
 
     /**
@@ -81,21 +167,14 @@ class TeleporterService {
                 // Retry logic with exponential backoff
                 while (!success && retryCount <= this.MAX_RETRIES) {
                     try {
-                        // Add delay for subsequent requests or retries
-                        if (nextPageToken || retryCount > 0) {
-                            const backoffTime = retryCount === 0 
-                                ? 2000 // Standard delay between pages
-                                : this.INITIAL_BACKOFF * Math.pow(2, retryCount - 1); // Exponential backoff
-                            
-                            logger.info(`Waiting ${backoffTime}ms before ${retryCount > 0 ? 'retry' : 'fetching next page'}...`);
-                            await this.sleep(backoffTime);
-                        }
+                        // Throttle the request based on rate limits
+                        await this.throttleRequest();
                         
                         // Prepare request parameters
                         const params = {
                             startTime,
                             endTime,
-                            pageSize: this.PAGE_SIZE, // Use maximum page size to reduce number of API calls
+                            pageSize: this.PAGE_SIZE, 
                             network: 'mainnet' // Filter for mainnet chains only
                         };
                         
@@ -105,13 +184,23 @@ class TeleporterService {
                             logger.info(`Fetching page ${pageCount} with token: ${nextPageToken}`);
                         }
                         
+                        // Prepare headers including API key if available
+                        const headers = {
+                            'Accept': 'application/json',
+                            'User-Agent': 'l1beat-backend'
+                        };
+                        
+                        // Add API key header if configured
+                        if (config.api.glacier.apiKey) {
+                            headers['x-glacier-api-key'] = config.api.glacier.apiKey;
+                            // Only log that we're using the API key, not the key itself
+                            logger.debug('Using Glacier API key for increased rate limits');
+                        }
+                        
                         const response = await axios.get(`${this.GLACIER_API_BASE}/teleporter/messages`, {
                             params,
                             timeout: config.api.glacier.timeout,
-                            headers: {
-                                'Accept': 'application/json',
-                                'User-Agent': 'l1beat-backend'
-                            }
+                            headers
                         });
                         
                         logger.info('Glacier API Teleporter Response:', {
@@ -428,6 +517,7 @@ class TeleporterService {
             let allMessages = [];
             let chunkErrors = [];
             
+            // Process chunks sequentially, not in parallel, to avoid overwhelming the API
             for (let i = 0; i < TOTAL_CHUNKS; i++) {
                 try {
                     const startHours = 24 - (i * HOURS_PER_CHUNK);
@@ -461,9 +551,12 @@ class TeleporterService {
                         logger.warn(`Hit page limit in chunk ${i+1}/${TOTAL_CHUNKS}, some messages may be missing`);
                     }
                     
-                    // Add a delay before fetching the next chunk to avoid rate limiting
+                    // Add a longer delay between chunks to avoid rate limiting
+                    // Increase delay between chunks to respect rate limits
                     if (i < TOTAL_CHUNKS - 1) {
-                        await this.sleep(8000);
+                        const chunkDelay = Math.max(10000, this.minDelayBetweenRequests * 2);
+                        logger.info(`Waiting ${chunkDelay}ms before fetching next chunk...`);
+                        await this.sleep(chunkDelay);
                     }
                     
                 } catch (error) {
@@ -481,7 +574,9 @@ class TeleporterService {
                     });
                     
                     // Add a longer delay after an error
-                    await this.sleep(10000);
+                    const errorDelay = Math.max(15000, this.minDelayBetweenRequests * 3);
+                    logger.info(`Error encountered, waiting ${errorDelay}ms before continuing...`);
+                    await this.sleep(errorDelay);
                 }
             }
             

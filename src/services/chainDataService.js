@@ -10,12 +10,22 @@ class ChainDataService {
     async fetchChainData() {
         try {
             logger.info('Fetching chains from Glacier API...');
+            
+            // Prepare headers including API key if available
+            const headers = {
+                'Accept': 'application/json',
+                'User-Agent': 'l1beat-backend'
+            };
+            
+            // Add API key header if configured
+            if (config.api.glacier.apiKey) {
+                headers['x-glacier-api-key'] = config.api.glacier.apiKey;
+                logger.debug('Using Glacier API key for chain data requests');
+            }
+            
             const response = await axios.get(`${this.GLACIER_API_BASE}/chains`, {
                 timeout: config.api.glacier.timeout,
-                headers: {
-                    'Accept': 'application/json',
-                    'User-Agent': 'l1beat-backend'
-                }
+                headers
             });
             
             logger.info('Glacier API Response:', {
