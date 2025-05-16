@@ -7,6 +7,7 @@ const { TeleporterMessage, TeleporterUpdateState } = require('../models/teleport
 class TeleporterService {
     constructor() {
         this.GLACIER_API_BASE = config.api.glacier.baseUrl;
+        this.GLACIER_API_KEY = config.api.glacier.apiKey;
         this.MAX_PAGES = 100; // Increased from 50 to 100 to handle high-volume periods
         this.MAX_RETRIES = 5; // Increased from 3 to 5 for better handling of timeout issues
         this.INITIAL_BACKOFF = 5000; // Increased from 3000 to 5000 ms for initial backoff
@@ -105,12 +106,13 @@ class TeleporterService {
                             logger.info(`Fetching page ${pageCount} with token: ${nextPageToken}`);
                         }
                         
-                        const response = await axios.get(`${this.GLACIER_API_BASE}/teleporter/messages`, {
+                        const response = await axios.get(`${this.GLACIER_API_BASE}/icm/messages`, {
                             params,
                             timeout: config.api.glacier.timeout,
                             headers: {
                                 'Accept': 'application/json',
-                                'User-Agent': 'l1beat-backend'
+                                'User-Agent': 'l1beat-backend',
+                                'x-glacier-api-key': this.GLACIER_API_KEY
                             }
                         });
                         

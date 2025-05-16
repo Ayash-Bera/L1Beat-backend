@@ -5,6 +5,7 @@ const logger = require('../utils/logger');
 class ChainDataService {
     constructor() {
         this.GLACIER_API_BASE = config.api.glacier.baseUrl;
+        this.GLACIER_API_KEY = config.api.glacier.apiKey;
     }
 
     async fetchChainData() {
@@ -14,7 +15,8 @@ class ChainDataService {
                 timeout: config.api.glacier.timeout,
                 headers: {
                     'Accept': 'application/json',
-                    'User-Agent': 'l1beat-backend'
+                    'User-Agent': 'l1beat-backend',
+                    'x-glacier-api-key': this.GLACIER_API_KEY
                 }
             });
             

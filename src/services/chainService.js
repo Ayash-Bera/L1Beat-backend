@@ -154,7 +154,12 @@ class ChainService {
                 }
 
                 logger.debug(`Fetching validators from primary endpoint: ${url.toString()}`);
-                const response = await fetch(url.toString());
+                const response = await fetch(url.toString(), {
+                    headers: {
+                        'Accept': 'application/json',
+                        'x-glacier-api-key': config.api.glacier.apiKey
+                    }
+                });
                 if (!response.ok) {
                     logger.warn(`Primary Glacier API request failed for subnet ${subnetId}, trying L1Validators endpoint`);
                     break; // Exit loop and try secondary endpoint
@@ -179,7 +184,12 @@ class ChainService {
                     secondaryUrl.searchParams.append('pageSize', '100');
                     
                     logger.debug(`Fetching validators from L1Validators endpoint: ${secondaryUrl.toString()}`);
-                    const response = await fetch(secondaryUrl.toString());
+                    const response = await fetch(secondaryUrl.toString(), {
+                        headers: {
+                            'Accept': 'application/json',
+                            'x-glacier-api-key': config.api.glacier.apiKey
+                        }
+                    });
                     if (!response.ok) {
                         throw new Error(`L1Validators API request failed with status ${response.status}`);
                     }
@@ -211,7 +221,12 @@ class ChainService {
                         nextPageUrl.searchParams.append('pageSize', '100');
                         nextPageUrl.searchParams.append('pageToken', l1NextPageToken);
                         
-                        const nextPageResponse = await fetch(nextPageUrl.toString());
+                        const nextPageResponse = await fetch(nextPageUrl.toString(), {
+                            headers: {
+                                'Accept': 'application/json',
+                                'x-glacier-api-key': config.api.glacier.apiKey
+                            }
+                        });
                         if (!nextPageResponse.ok) {
                             logger.warn(`Failed to fetch next page of L1Validators, status: ${nextPageResponse.status}`);
                             break;
@@ -269,7 +284,11 @@ class ChainService {
 
             logger.info(`Fetching validators from alternative endpoint for chain ${chainId}`);
             const response = await fetch(alternativeValidatorEndpoints[chainId], {
-                timeout: config.api.glacier.timeout // Use the same timeout as Glacier API
+                timeout: config.api.glacier.timeout, // Use the same timeout as Glacier API
+                headers: {
+                    'Accept': 'application/json',
+                    'x-glacier-api-key': config.api.glacier.apiKey
+                }
             });
             
             if (!response.ok) {

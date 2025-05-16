@@ -35,6 +35,7 @@ const config = {
   api: {
     glacier: {
       baseUrl: process.env.GLACIER_API_BASE,
+      apiKey: process.env.GLACIER_API_KEY,
       timeout: parseInt(process.env.GLACIER_API_TIMEOUT || '30000'),
       endpoints: {
         validators: process.env.GLACIER_VALIDATORS_ENDPOINT || '/networks/mainnet/validators',

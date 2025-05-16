@@ -23,6 +23,7 @@ const formattedDate = targetDate.toISOString().split('T')[0];
 
 // Constants for API requests
 const GLACIER_API_BASE = process.env.GLACIER_API_BASE || config.api.glacier.baseUrl;
+const GLACIER_API_KEY = process.env.GLACIER_API_KEY || config.api.glacier.apiKey;
 const PAGE_SIZE = 100; // Maximum page size for efficiency
 const MAX_PAGES = 1000; // Higher limit to try to get all data
 const MAX_RETRIES = 3;
@@ -97,7 +98,8 @@ async function fetchMessagesForDate(date) {
             timeout: 30000,
             headers: {
               'Accept': 'application/json',
-              'User-Agent': 'l1beat-transaction-checker'
+              'User-Agent': 'l1beat-transaction-checker',
+              'x-glacier-api-key': GLACIER_API_KEY
             }
           });
           
