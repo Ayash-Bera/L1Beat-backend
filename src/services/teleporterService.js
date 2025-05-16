@@ -8,10 +8,9 @@ class TeleporterService {
     constructor() {
         this.GLACIER_API_BASE = config.api.glacier.baseUrl;
         this.GLACIER_API_KEY = config.api.glacier.apiKey;
-        this.MAX_PAGES = 100; // Increased from 50 to 100 to handle high-volume periods
         this.MAX_RETRIES = 5; // Increased from 3 to 5 for better handling of timeout issues
         this.INITIAL_BACKOFF = 5000; // Increased from 3000 to 5000 ms for initial backoff
-        this.PAGE_SIZE = 50; // Reduced from 100 to 50 to reduce likelihood of timeouts
+        this.PAGE_SIZE = 100; 
         this.REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes in milliseconds
     }
 
@@ -79,7 +78,7 @@ class TeleporterService {
             let currentStartTime = startTime;
             
             // Keep fetching until we've covered the entire time range
-            while (currentStartTime < currentEndTime && pageCount < this.MAX_PAGES) {
+            while (currentStartTime < currentEndTime) {
                 let timeWindowMessages = [];
                 let timeWindowPageCount = 0;
                 let localNextPageToken = null;
