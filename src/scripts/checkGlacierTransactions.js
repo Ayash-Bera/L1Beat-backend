@@ -28,6 +28,15 @@ const PAGE_SIZE = 100; // Maximum page size for efficiency
 const MAX_PAGES = 1000; // Higher limit to try to get all data
 const MAX_RETRIES = 3;
 
+// Log API key status (without revealing full key)
+if (GLACIER_API_KEY) {
+  const keyPrefix = GLACIER_API_KEY.substring(0, 6);
+  const keySuffix = GLACIER_API_KEY.substring(GLACIER_API_KEY.length - 3);
+  logger.info(`Using Glacier API key: ${keyPrefix}...${keySuffix} (length: ${GLACIER_API_KEY.length})`);
+} else {
+  logger.warn('No Glacier API key found! Requests may be rate limited.');
+}
+
 // Sleep function for rate limiting
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -89,6 +98,18 @@ async function fetchMessagesForDate(date) {
             params.pageToken = nextPageToken;
           }
           
+          // Prepare headers with API key
+          const headers = {
+            'Accept': 'application/json',
+            'User-Agent': 'l1beat-transaction-checker'
+          };
+          
+          // Add API key in both formats to ensure it works
+          if (GLACIER_API_KEY) {
+            headers['x-glacier-api-key'] = GLACIER_API_KEY;
+            headers['x-api-key'] = GLACIER_API_KEY; // Alternative format
+          }
+          
           // Use the icm/messages endpoint instead of teleporter/messages
           const url = `${GLACIER_API_BASE}/icm/messages`;
           logger.info(`Requesting: ${url} (page ${pageCount})`);
@@ -96,11 +117,7 @@ async function fetchMessagesForDate(date) {
           const response = await axios.get(url, {
             params,
             timeout: 30000,
-            headers: {
-              'Accept': 'application/json',
-              'User-Agent': 'l1beat-transaction-checker',
-              'x-glacier-api-key': GLACIER_API_KEY
-            }
+            headers
           });
           
           if (!response.data || !response.data.messages) {

@@ -160,6 +160,19 @@ class TeleporterService {
             const startTime = now - (startHoursAgo * 60 * 60);
             const endTime = endHoursAgo > 0 ? now - (endHoursAgo * 60 * 60) : now;
             
+            // DIAGNOSTIC LOGGING: Log exact time window being used
+            logger.info(`DIAGNOSTIC: Time window calculation for messages:`, {
+                startHoursAgo,
+                endHoursAgo,
+                startTimeUnix: startTime,
+                endTimeUnix: endTime,
+                startTimeISO: new Date(startTime * 1000).toISOString(),
+                endTimeISO: new Date(endTime * 1000).toISOString(),
+                nowUnix: now,
+                nowISO: new Date(now * 1000).toISOString(),
+                localTimezoneOffset: new Date().getTimezoneOffset()
+            });
+            
             let allMessages = [];
             let nextPageToken = null;
             let pageCount = 0;
@@ -234,7 +247,14 @@ class TeleporterService {
                             logger.debug('Using Glacier API key from config');
                         }
                         
-                        const response = await axios.get(`${this.GLACIER_API_BASE}/teleporter/messages`, {
+                        // DIAGNOSTIC LOGGING: Log the exact API endpoint being used
+                        const apiEndpoint = `${this.GLACIER_API_BASE}/teleporter/messages`;
+                        logger.info(`DIAGNOSTIC: Using API endpoint: ${apiEndpoint}`, {
+                            page: pageCount,
+                            params: JSON.stringify(params)
+                        });
+                        
+                        const response = await axios.get(apiEndpoint, {
                             params,
                             timeout: config.api.glacier.timeout,
                             headers
@@ -759,8 +779,34 @@ class TeleporterService {
             if (allMessages.length > 0) {
                 logger.info(`Processing ${allMessages.length} teleporter messages...`);
                 
+                // DIAGNOSTIC LOGGING: Record message info before processing
+                const firstMessageTime = allMessages[0]?.sourceTransaction?.timestamp || 
+                                         allMessages[0]?.timestamp || 
+                                         'unknown timestamp';
+                const lastMessageTime = allMessages[allMessages.length-1]?.sourceTransaction?.timestamp || 
+                                        allMessages[allMessages.length-1]?.timestamp || 
+                                        'unknown timestamp';
+                
+                logger.info(`DIAGNOSTIC: About to process collected messages for daily update`, {
+                    totalMessages: allMessages.length,
+                    messageTimeRange: `${new Date(firstMessageTime * 1000).toISOString()} to ${new Date(lastMessageTime * 1000).toISOString()}`,
+                    requestId
+                });
+                
                 // Process the messages to get counts by source and destination
                 const processedData = await this.processMessages(allMessages);
+                
+                // DIAGNOSTIC LOGGING: Compare input vs processed messages
+                logger.info(`DIAGNOSTIC: Message processing results for daily update`, {
+                    inputMessageCount: allMessages.length,
+                    processedPairsCount: processedData.length,
+                    totalProcessedMessages: processedData.reduce((sum, item) => sum + item.messageCount, 0),
+                    requestId
+                });
+                
+                // Delete any existing daily data before saving new data
+                await TeleporterMessage.deleteMany({ dataType: 'daily' });
+                logger.info('Deleted previous daily teleporter messages before saving new data', { requestId });
                 
                 // Save the processed data to the database
                 const teleporterData = new TeleporterMessage({
@@ -1616,6 +1662,32 @@ class TeleporterService {
      */
     async saveMessageCountToDB(messageCounts, totalMessages, timeWindow = 24, dataType = 'daily') {
         try {
+            // Verify the sum of all message counts matches the expected total
+            const sumMessageCounts = messageCounts.reduce((sum, item) => sum + item.messageCount, 0);
+            
+            logger.info('Message count validation before saving to DB:', {
+                expectedTotalMessages: totalMessages,
+                actualSumOfMessageCounts: sumMessageCounts,
+                difference: totalMessages - sumMessageCounts,
+                countsMatch: totalMessages === sumMessageCounts
+            });
+            
+            // If there's a significant discrepancy, log a warning
+            if (Math.abs(totalMessages - sumMessageCounts) > totalMessages * 0.05) { // >5% difference
+                logger.warn('Significant discrepancy between total messages and sum of message counts!', {
+                    expectedTotalMessages: totalMessages,
+                    actualSumOfMessageCounts: sumMessageCounts,
+                    difference: totalMessages - sumMessageCounts,
+                    percentDifference: ((totalMessages - sumMessageCounts) / totalMessages * 100).toFixed(2) + '%'
+                });
+            }
+            
+            // First, delete any existing data for this dataType to ensure we're not accumulating counts
+            await TeleporterMessage.deleteMany({ dataType });
+            
+            logger.info(`Deleted previous ${dataType} teleporter messages before saving new data`);
+            
+            // Create and save the new record
             const teleporterMessage = new TeleporterMessage({
                 updatedAt: new Date(),
                 messageCounts,
@@ -1630,12 +1702,15 @@ class TeleporterService {
                 count: messageCounts.length,
                 totalMessages,
                 timeWindow,
-                dataType
+                dataType,
+                replacementStrategy: 'complete' // Indicate we're using complete replacement
             });
         } catch (error) {
             logger.error('Error saving message count to database:', {
-                message: error.message
+                message: error.message,
+                stack: error.stack
             });
+            throw error; // Re-throw to allow calling method to handle
         }
     }
 
@@ -1645,6 +1720,15 @@ class TeleporterService {
      * @returns {Promise<Array>} Processed message counts
      */
     async processMessages(messages) {
+        // DIAGNOSTIC LOGGING: Log message count before processing
+        logger.info(`DIAGNOSTIC: Processing ${messages.length} teleporter messages`, {
+            firstMessageTimestamp: messages.length > 0 ? 
+                (messages[0].sourceTransaction?.timestamp || messages[0].timestamp || 'unknown') : 'no messages',
+            lastMessageTimestamp: messages.length > 0 ? 
+                (messages[messages.length-1].sourceTransaction?.timestamp || messages[messages.length-1].timestamp || 'unknown') : 'no messages',
+            sampleMessageKeys: messages.length > 0 ? Object.keys(messages[0]).join(', ') : 'no messages'
+        });
+
         // Fetch all chains from the database to map blockchain IDs to chain names
         const chains = await Chain.find().select('chainId chainName').lean();
         
@@ -1654,12 +1738,30 @@ class TeleporterService {
             blockchainIdToName[chain.chainId] = chain.chainName;
         });
         
+        // DIAGNOSTIC LOGGING: Log chain mapping info
+        logger.info(`DIAGNOSTIC: Chain mapping loaded with ${chains.length} chains`, {
+            sampleMappings: Object.entries(blockchainIdToName).slice(0, 5).map(([id, name]) => `${id}: ${name}`).join(', ')
+        });
+        
         // Process messages to count by source -> destination
         const messageCounts = {};
+        let skippedMessages = 0;
+        let processedMessages = 0;
         
         for (const message of messages) {
             const sourceId = message.sourceBlockchainId;
             const destId = message.destinationBlockchainId;
+            
+            // Check if we have valid source and destination IDs
+            if (!sourceId || !destId) {
+                skippedMessages++;
+                logger.debug('Skipping message with missing source or destination ID', {
+                    messageId: message.messageId || 'unknown',
+                    hasSourceId: !!sourceId,
+                    hasDestId: !!destId
+                });
+                continue;
+            }
             
             // Get chain names or use IDs if names not available
             const sourceName = blockchainIdToName[message.sourceEvmChainId] || 
@@ -1678,6 +1780,7 @@ class TeleporterService {
             }
             
             messageCounts[key].messageCount++;
+            processedMessages++;
         }
         
         // Convert to array
@@ -1685,6 +1788,26 @@ class TeleporterService {
         
         // Sort by message count (descending)
         result.sort((a, b) => b.messageCount - a.messageCount);
+        
+        // DIAGNOSTIC LOGGING: Log summary of processing results
+        logger.info(`DIAGNOSTIC: Message processing complete`, {
+            inputMessageCount: messages.length,
+            processedMessageCount: processedMessages,
+            skippedMessages,
+            uniqueSourceDestPairs: result.length,
+            totalProcessedCount: result.reduce((sum, item) => sum + item.messageCount, 0),
+            top5Pairs: result.slice(0, 5).map(item => `${item.sourceChain} → ${item.destinationChain}: ${item.messageCount}`).join(', ')
+        });
+        
+        // Verify consistency of counts
+        const totalCounted = result.reduce((sum, item) => sum + item.messageCount, 0);
+        if (totalCounted !== processedMessages) {
+            logger.warn('Message count inconsistency detected!', {
+                processedMessages,
+                sumOfCounts: totalCounted,
+                difference: processedMessages - totalCounted
+            });
+        }
         
         // Ensure we return plain objects without MongoDB-specific fields
         return result.map(item => ({
@@ -1857,6 +1980,31 @@ class TeleporterService {
                 if (allMessages.length > 0) {
                     // Process the messages to get counts by source and destination
                     const processedData = await this.processMessages(allMessages);
+                    
+                    // Log message count validation info
+                    const sumMessageCounts = processedData.reduce((sum, item) => sum + item.messageCount, 0);
+                    logger.info('Weekly data validation before saving to DB:', {
+                        inputMessageCount: allMessages.length,
+                        processedPairsCount: processedData.length,
+                        sumOfMessageCounts: sumMessageCounts,
+                        difference: allMessages.length - sumMessageCounts,
+                        requestId
+                    });
+                    
+                    // If there's a significant discrepancy, log a warning
+                    if (Math.abs(allMessages.length - sumMessageCounts) > allMessages.length * 0.05) { // >5% difference
+                        logger.warn('Significant discrepancy in weekly data between input messages and processed counts!', {
+                            inputMessageCount: allMessages.length,
+                            sumOfMessageCounts: sumMessageCounts,
+                            difference: allMessages.length - sumMessageCounts,
+                            percentDifference: ((allMessages.length - sumMessageCounts) / allMessages.length * 100).toFixed(2) + '%',
+                            requestId
+                        });
+                    }
+                    
+                    // Delete any existing weekly data
+                    await TeleporterMessage.deleteMany({ dataType: 'weekly' });
+                    logger.info('Deleted previous weekly teleporter messages before saving new data');
                     
                     // Save the processed data to the database
                     const teleporterData = new TeleporterMessage({
