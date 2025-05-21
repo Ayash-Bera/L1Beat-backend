@@ -57,9 +57,10 @@ class TeleporterService {
      * @param {number} endHoursAgo - End time in hours ago
      * @returns {Promise<Object>} Object with messages array and hitPageLimit flag
      */
-    async fetchTeleporterMessagesWithTimeRange(startHoursAgo, endHoursAgo) {
+    async fetchTeleporterMessagesWithTimeRange(startHoursAgo, endHoursAgo, chunkInfo = null) {
         try {
-            logger.info(`Fetching teleporter messages from ${startHoursAgo} to ${endHoursAgo} hours ago with pageSize=${this.PAGE_SIZE}...`);
+            const chunkLabel = chunkInfo ? `[Chunk ${chunkInfo.current}/${chunkInfo.total}: ${startHoursAgo}-${endHoursAgo}h ago]` : '';
+            logger.info(`Fetching teleporter messages from ${startHoursAgo} to ${endHoursAgo} hours ago with pageSize=${this.PAGE_SIZE}... ${chunkLabel}`);
             
             // Calculate timestamps
             const now = Math.floor(Date.now() / 1000);
@@ -72,11 +73,31 @@ class TeleporterService {
             let hitPageLimit = false;
             let reachedTimeLimit = false;
             
+            // DIAGNOSTIC: Track tokens to detect duplicates
+            const tokenTracker = new Set();
+            const duplicateTokens = new Set();
+            
             // Fetch pages until there are no more or we hit the limit
             do {
                 pageCount++;
                 let retryCount = 0;
                 let success = false;
+                
+                // DIAGNOSTIC: Track token usage and duplicates
+                if (nextPageToken) {
+                    if (tokenTracker.has(nextPageToken)) {
+                        duplicateTokens.add(nextPageToken);
+                        logger.warn(`DIAGNOSTIC: TOKEN REUSE DETECTED for token ${nextPageToken} at page ${pageCount} ${chunkLabel}`, {
+                            tokenReuseCount: duplicateTokens.size,
+                            tokensUsed: tokenTracker.size,
+                            processId: `${process.pid}-${Math.random().toString(36).substring(2, 8)}`,
+                            timestamp: new Date().toISOString(),
+                            chunkInfo
+                        });
+                    } else {
+                        tokenTracker.add(nextPageToken);
+                    }
+                }
                 
                 // Retry logic with exponential backoff
                 while (!success && retryCount <= this.MAX_RETRIES) {
@@ -87,7 +108,7 @@ class TeleporterService {
                                 ? 2000 // Standard delay between pages
                                 : this.INITIAL_BACKOFF * Math.pow(2, retryCount - 1); // Exponential backoff
                             
-                            logger.info(`Waiting ${backoffTime}ms before ${retryCount > 0 ? 'retry' : 'fetching next page'}...`);
+                            logger.info(`Waiting ${backoffTime}ms before ${retryCount > 0 ? 'retry' : 'fetching next page'}... ${chunkLabel}`);
                             await this.sleep(backoffTime);
                         }
                         
@@ -102,7 +123,12 @@ class TeleporterService {
                         // Add page token if we have one
                         if (nextPageToken) {
                             params.pageToken = nextPageToken;
-                            logger.info(`Fetching page ${pageCount} with token: ${nextPageToken}`);
+                            logger.info(`Fetching page ${pageCount} with token: ${nextPageToken} ${chunkLabel}`, {
+                                // DIAGNOSTIC: Add request identifier
+                                requestId: `${process.pid}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+                                tokenReuseDetected: duplicateTokens.has(nextPageToken),
+                                chunkInfo
+                            });
                         }
                         
                         const response = await axios.get(`${this.GLACIER_API_BASE}/teleporter/messages`, {
@@ -120,7 +146,8 @@ class TeleporterService {
                             retry: retryCount,
                             messageCount: response.data?.messages?.length || 0,
                             hasNextPage: !!response.data?.nextPageToken,
-                            timeRange: `${startHoursAgo}-${endHoursAgo} hours ago`
+                            timeRange: `${startHoursAgo}-${endHoursAgo} hours ago`,
+                            chunkInfo
                         });
             
                         if (!response.data || !response.data.messages) {
@@ -244,9 +271,10 @@ class TeleporterService {
                         // Handle rate limiting with retry
                         if (error.response && error.response.status === 429) {
                             retryCount++;
-                            logger.warn(`Rate limited by Glacier API (attempt ${retryCount}/${this.MAX_RETRIES})`, {
+                            logger.warn(`Rate limited by Glacier API (attempt ${retryCount}/${this.MAX_RETRIES}) ${chunkLabel}`, {
                                 page: pageCount,
-                                messagesCollected: allMessages.length
+                                messagesCollected: allMessages.length,
+                                chunkInfo
                             });
                             
                             if (retryCount > this.MAX_RETRIES) {
@@ -256,28 +284,30 @@ class TeleporterService {
                         } else if (error.code === 'ECONNABORTED') {
                             // Handle timeout errors
                             retryCount++;
-                            logger.warn(`Timeout error with Glacier API (attempt ${retryCount}/${this.MAX_RETRIES})`, {
+                            logger.warn(`Timeout error with Glacier API (attempt ${retryCount}/${this.MAX_RETRIES}) ${chunkLabel}`, {
                                 page: pageCount,
                                 messagesCollected: allMessages.length,
                                 error: error.message,
-                                timeout: config.api.glacier.timeout
+                                timeout: config.api.glacier.timeout,
+                                chunkInfo
                             });
                             
                             if (retryCount > this.MAX_RETRIES) {
-                                logger.error(`Max retries exceeded for timeout error`);
+                                logger.error(`Max retries exceeded for timeout error ${chunkLabel}`);
                                 break;
                             }
                         } else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
                             // Handle network connectivity issues
                             retryCount++;
-                            logger.warn(`Network connectivity issue with Glacier API (attempt ${retryCount}/${this.MAX_RETRIES}): ${error.code}`, {
+                            logger.warn(`Network connectivity issue with Glacier API (attempt ${retryCount}/${this.MAX_RETRIES}): ${error.code} ${chunkLabel}`, {
                                 page: pageCount,
                                 messagesCollected: allMessages.length,
-                                error: error.message
+                                error: error.message,
+                                chunkInfo
                             });
                             
                             if (retryCount > this.MAX_RETRIES) {
-                                logger.error(`Max retries exceeded for network issue: ${error.code}`);
+                                logger.error(`Max retries exceeded for network issue: ${error.code} ${chunkLabel}`);
                                 break;
                             }
                         } else {
@@ -286,7 +316,8 @@ class TeleporterService {
                                 message: error.message,
                                 code: error.code,
                                 status: error.response?.status,
-                                statusText: error.response?.statusText
+                                statusText: error.response?.statusText,
+                                chunkInfo
                             });
                             throw error;
                         }
@@ -390,11 +421,113 @@ class TeleporterService {
     /**
      * Update teleporter data in the database
      * This method is called by the cron job
+     * @param {string} requestId - Optional request ID for tracking
      * @returns {Promise<void>}
      */
-    async updateTeleporterData() {
+    async updateTeleporterData(requestId = 'unknown') {
         try {
-            logger.info('Starting daily teleporter data update...');
+            logger.info('Starting daily teleporter data update...', { requestId });
+            
+            // DIAGNOSTIC: Check if an update is already in progress at the start
+            const existingUpdate = await TeleporterUpdateState.findOne({ 
+                updateType: 'daily',
+                state: 'in_progress'
+            });
+            
+            logger.info('DIAGNOSTIC: updateTeleporterData check at start', {
+                updateAlreadyInProgress: !!existingUpdate,
+                updateStartedAt: existingUpdate?.startedAt,
+                timeSinceStart: existingUpdate ? 
+                    Math.round((Date.now() - new Date(existingUpdate.startedAt).getTime()) / 1000) + ' seconds' : 
+                    'N/A',
+                callerTimestamp: new Date().toISOString(),
+                requestId
+            });
+            
+            // Check if the existing update is stale (hasn't been updated in 10 minutes)
+            // This is critical to fix updates that get stuck and never complete
+            if (existingUpdate) {
+                const lastUpdated = new Date(existingUpdate.lastUpdatedAt);
+                const timeSinceLastUpdate = Date.now() - lastUpdated.getTime();
+                const timeSinceStart = Date.now() - new Date(existingUpdate.startedAt).getTime();
+                
+                logger.info('DIAGNOSTIC: Checking for stale update', {
+                    updateStartedAt: existingUpdate.startedAt,
+                    updateLastUpdatedAt: existingUpdate.lastUpdatedAt,
+                    timeSinceLastUpdate: Math.round(timeSinceLastUpdate / 1000 / 60) + ' minutes',
+                    timeSinceStart: Math.round(timeSinceStart / 1000 / 60) + ' minutes',
+                    requestId
+                });
+                
+                // If update hasn't been updated in 10 minutes, mark it as stale and failed
+                if (timeSinceLastUpdate > 10 * 60 * 1000) { // 10 minutes
+                    logger.warn('Found stale update! Marking as failed and continuing with new update', {
+                        updateStartedAt: existingUpdate.startedAt,
+                        updateLastUpdatedAt: existingUpdate.lastUpdatedAt,
+                        timeSinceLastUpdate: Math.round(timeSinceLastUpdate / 1000 / 60) + ' minutes',
+                        requestId
+                    });
+                    
+                    // Mark the stale update as failed
+                    existingUpdate.state = 'failed';
+                    existingUpdate.lastUpdatedAt = new Date();
+                    existingUpdate.error = {
+                        message: 'Update timed out',
+                        details: `No updates for ${Math.round(timeSinceLastUpdate / 1000 / 60)} minutes`
+                    };
+                    await existingUpdate.save();
+                    
+                    // Continue with this update (will create a new one below)
+                }
+                // Otherwise, if it's not stale, check if it's recent (less than 5 minutes)
+                else if (timeSinceLastUpdate < 5 * 60 * 1000) {
+                    logger.info('Update already in progress and recently updated, skipping duplicate update', {
+                        startedAt: existingUpdate.startedAt,
+                        lastUpdatedAt: existingUpdate.lastUpdatedAt,
+                        timeSinceLastUpdate: Math.round(timeSinceLastUpdate / 1000) + ' seconds',
+                        requestId
+                    });
+                    
+                    return {
+                        success: true,
+                        status: 'in_progress',
+                        message: 'Update already in progress',
+                        alreadyRunningUpdate: {
+                            startedAt: existingUpdate.startedAt,
+                            lastUpdatedAt: existingUpdate.lastUpdatedAt,
+                            progress: existingUpdate.progress
+                        }
+                    };
+                }
+            }
+            
+            // DIAGNOSTIC: If this is a duplicate update, log it - this will help validate our hypothesis
+            if (existingUpdate && existingUpdate.state === 'in_progress') {
+                logger.warn('DIAGNOSTIC: Concurrent update detected! This update was triggered while another is still in progress', {
+                    existingUpdateStartedAt: existingUpdate.startedAt,
+                    existingUpdateLastUpdatedAt: existingUpdate.lastUpdatedAt,
+                    timeSinceLastUpdate: Math.round((Date.now() - new Date(existingUpdate.lastUpdatedAt).getTime()) / 1000) + ' seconds',
+                    timeSinceStart: Math.round((Date.now() - new Date(existingUpdate.startedAt).getTime()) / 1000) + ' seconds',
+                    requestId,
+                    concurrencyIssueLikely: true
+                });
+                
+                // DIAGNOSTIC COUNT: Get active update count
+                const allActiveUpdates = await TeleporterUpdateState.find({
+                    updateType: 'daily',
+                    state: 'in_progress'
+                });
+                
+                logger.warn('DIAGNOSTIC: Current active update count', {
+                    count: allActiveUpdates.length,
+                    updates: allActiveUpdates.map(u => ({
+                        id: u._id.toString(),
+                        startedAt: u.startedAt,
+                        timeSinceStart: Math.round((Date.now() - new Date(u.startedAt).getTime()) / 1000) + ' seconds'
+                    })),
+                    requestId
+                });
+            }
             
             // Get the current time
             const now = new Date();
@@ -402,6 +535,7 @@ class TeleporterService {
             // Create or update the update state
             let updateState = await TeleporterUpdateState.findOne({ updateType: 'daily' });
             if (!updateState) {
+                logger.info('DIAGNOSTIC: Creating new update state - no previous state found', { requestId });
                 updateState = new TeleporterUpdateState({
                     updateType: 'daily',
                     state: 'in_progress',
@@ -409,6 +543,12 @@ class TeleporterService {
                     lastUpdatedAt: now
                 });
             } else {
+                logger.info('DIAGNOSTIC: Updating existing update state', {
+                    previousState: updateState.state,
+                    previousStartedAt: updateState.startedAt,
+                    timeSinceLastUpdate: Math.round((Date.now() - new Date(updateState.lastUpdatedAt).getTime()) / 1000) + ' seconds',
+                    requestId
+                });
                 updateState.state = 'in_progress';
                 updateState.startedAt = now;
                 updateState.lastUpdatedAt = now;
@@ -433,19 +573,31 @@ class TeleporterService {
                     const startHours = 24 - (i * HOURS_PER_CHUNK);
                     const endHours = startHours - HOURS_PER_CHUNK;
                     
-                    logger.info(`Fetching chunk ${i+1}/${TOTAL_CHUNKS}: ${startHours}-${endHours} hours ago`);
+                    const chunkInfo = {
+                        current: i + 1,
+                        total: TOTAL_CHUNKS,
+                        startHours,
+                        endHours,
+                        timeRange: `${startHours}-${endHours}h ago`
+                    };
+                    
+                    logger.info(`Fetching chunk ${i+1}/${TOTAL_CHUNKS}: ${startHours}-${endHours} hours ago`, {
+                        requestId,
+                        chunkInfo
+                    });
                     
                     // Update the state to show which chunk we're processing
                     updateState.progress = {
                         currentChunk: i + 1,
                         totalChunks: TOTAL_CHUNKS,
-                        messagesCollected: allMessages.length
+                        messagesCollected: allMessages.length,
+                        timeRange: `${startHours}-${endHours}h ago`
                     };
                     updateState.lastUpdatedAt = new Date();
                     await updateState.save();
                     
                     // Fetch messages for this time chunk
-                    const result = await this.fetchTeleporterMessagesWithTimeRange(startHours, endHours);
+                    const result = await this.fetchTeleporterMessagesWithTimeRange(startHours, endHours, chunkInfo);
                     
                     // Add messages from this chunk to our collection
                     allMessages = [...allMessages, ...result.messages];
@@ -453,12 +605,17 @@ class TeleporterService {
                     logger.info(`Completed chunk ${i+1}/${TOTAL_CHUNKS}, collected ${result.messages.length} messages`, {
                         hitPageLimit: result.hitPageLimit,
                         reachedTimeLimit: result.reachedTimeLimit,
-                        totalMessages: allMessages.length
+                        totalMessages: allMessages.length,
+                        chunkInfo,
+                        requestId
                     });
                     
                     // If we hit the page limit, log a warning
                     if (result.hitPageLimit) {
-                        logger.warn(`Hit page limit in chunk ${i+1}/${TOTAL_CHUNKS}, some messages may be missing`);
+                        logger.warn(`Hit page limit in chunk ${i+1}/${TOTAL_CHUNKS}, some messages may be missing`, {
+                            chunkInfo,
+                            requestId
+                        });
                     }
                     
                     // Add a delay before fetching the next chunk to avoid rate limiting
@@ -575,9 +732,10 @@ class TeleporterService {
 
     /**
      * Processes teleporter messages to get daily counts grouped by source and destination chains
+     * @param {string} requestId - Optional request ID for tracking
      * @returns {Promise<Array>} Array of objects with sourceChain, destinationChain, and messageCount
      */
-    async getDailyCrossChainMessageCount() {
+    async getDailyCrossChainMessageCount(requestId = 'unknown') {
         try {
             // Always prioritize database data
             const recentData = await this.getRecentMessageCountFromDB(this.REFRESH_INTERVAL, 'daily');
@@ -586,13 +744,14 @@ class TeleporterService {
                 logger.info('Using recent teleporter message count data from database', {
                     updatedAt: recentData.updatedAt,
                     totalMessages: recentData.totalMessages,
-                    timeWindow: recentData.timeWindow
+                    timeWindow: recentData.timeWindow,
+                    requestId
                 });
                 return recentData.messageCounts;
             }
             
             // If no recent data, try to get any data from DB regardless of age
-            logger.warn('No recent teleporter data in database, checking for any data');
+            logger.warn('No recent teleporter data in database, checking for any data', { requestId });
             const anyData = await this.getAnyMessageCountFromDB('daily');
             
             if (anyData) {
@@ -600,17 +759,74 @@ class TeleporterService {
                     updatedAt: anyData.updatedAt,
                     totalMessages: anyData.totalMessages,
                     timeWindow: anyData.timeWindow,
-                    age: Math.round((Date.now() - anyData.updatedAt) / (60 * 1000)) + ' minutes old'
+                    age: Math.round((Date.now() - anyData.updatedAt) / (60 * 1000)) + ' minutes old',
+                    requestId
+                });
+                
+                // DIAGNOSTIC: Check if an update is already in progress before triggering a new one
+                const updateState = await TeleporterUpdateState.findOne({ 
+                    updateType: 'daily',
+                    state: 'in_progress'
+                });
+                
+                // DIAGNOSTIC: Also get all recent update states to check for patterns
+                const recentUpdateStates = await TeleporterUpdateState.find({
+                    updateType: 'daily',
+                    lastUpdatedAt: { $gte: new Date(Date.now() - 60 * 60 * 1000) } // Last hour
+                }).sort({ startedAt: -1 }).limit(10);
+                
+                logger.info('DIAGNOSTIC: Update in progress check', {
+                    updateInProgress: !!updateState,
+                    updateStartedAt: updateState?.startedAt,
+                    updateLastUpdatedAt: updateState?.lastUpdatedAt,
+                    recentUpdateCount: recentUpdateStates.length,
+                    recentUpdates: recentUpdateStates.map(s => ({
+                        state: s.state,
+                        startedAt: s.startedAt,
+                        lastUpdatedAt: s.lastUpdatedAt,
+                        timeSinceStart: Math.round((Date.now() - new Date(s.startedAt).getTime()) / 1000) + 's'
+                    })),
+                    dataAge: Math.round((Date.now() - anyData.updatedAt) / (60 * 1000)) + ' minutes',
+                    requestTimestamp: new Date().toISOString(),
+                    requestId
                 });
                 
                 // If data is older than 30 minutes, trigger a background update
                 if (Date.now() - anyData.updatedAt > 30 * 60 * 1000) {
-                    logger.info('Daily data is older than 30 minutes, triggering background update');
-                    this.updateTeleporterData().catch(err => {
-                        logger.error('Error in background teleporter update:', {
-                            message: err.message
-                        });
+                    
+                    // Determine if we should trigger an update:
+                    // 1. No update is currently in progress, OR
+                    // 2. An update is in progress but hasn't been updated in 5 minutes (likely stale/stuck)
+                    const shouldTriggerUpdate = !updateState || 
+                        (updateState.state === 'in_progress' && 
+                         Date.now() - new Date(updateState.lastUpdatedAt).getTime() > 5 * 60 * 1000);
+                    
+                    logger.info('DIAGNOSTIC: Daily data is older than 30 minutes', {
+                        wouldTriggerUnderNewLogic: shouldTriggerUpdate,
+                        currentlyTriggering: shouldTriggerUpdate, // Now using the new logic
+                        updateInProgress: !!updateState,
+                        timeSinceLastUpdate: updateState ? 
+                            Math.round((Date.now() - new Date(updateState.lastUpdatedAt).getTime()) / (60 * 1000)) + ' minutes' : 
+                            'N/A',
+                        requestId
                     });
+                    
+                    // Only trigger update if needed based on our new condition
+                    if (shouldTriggerUpdate) {
+                        logger.info('Daily data is older than 30 minutes, triggering background update', { requestId });
+                        this.updateTeleporterData(requestId).catch(err => {
+                            logger.error('Error in background teleporter update:', {
+                                message: err.message,
+                                requestId
+                            });
+                        });
+                    } else {
+                        logger.info('Daily data is older than 30 minutes but update already in progress, skipping new update', {
+                            updateStartedAt: updateState?.startedAt,
+                            timeSinceStart: Math.round((Date.now() - new Date(updateState.startedAt).getTime()) / (60 * 1000)) + ' minutes',
+                            requestId
+                        });
+                    }
                 }
                 
                 return anyData.messageCounts;
@@ -618,10 +834,11 @@ class TeleporterService {
             
             // If no data in database at all, trigger an update and return empty array for now
             // This should only happen on first run
-            logger.warn('No teleporter data in database, triggering update');
-            this.updateTeleporterData().catch(err => {
+            logger.warn('No teleporter data in database, triggering update', { requestId });
+            this.updateTeleporterData(requestId).catch(err => {
                 logger.error('Error in background teleporter update:', {
-                    message: err.message
+                    message: err.message,
+                    requestId
                 });
             });
             
@@ -631,7 +848,8 @@ class TeleporterService {
         } catch (error) {
             logger.error('Error processing teleporter messages:', {
                 message: error.message,
-                stack: error.stack
+                stack: error.stack,
+                requestId
             });
             
             // In case of error, return empty array
@@ -814,8 +1032,17 @@ class TeleporterService {
                     const chunkStartHours = endHoursAgo + (HOURS_PER_CHUNK * (CHUNKS_PER_DAY - i));
                     const chunkEndHours = chunkStartHours - HOURS_PER_CHUNK;
                     
+                    const chunkInfo = {
+                        current: i + 1,
+                        total: CHUNKS_PER_DAY,
+                        startHours: chunkStartHours,
+                        endHours: chunkEndHours,
+                        timeRange: `${chunkStartHours}-${chunkEndHours}h ago`
+                    };
+                    
                     logger.info(`Fetching chunk ${i+1}/${CHUNKS_PER_DAY} for day ${currentDay}: ${chunkStartHours}-${chunkEndHours} hours ago`, {
-                        service: "l1beat-backend"
+                        service: "l1beat-backend",
+                        chunkInfo
                     });
                     
                     // Update the state to show which chunk we're processing
@@ -831,7 +1058,7 @@ class TeleporterService {
                     await updateState.save();
                     
                     // Fetch messages for this time chunk
-                    const result = await this.fetchTeleporterMessagesWithTimeRange(chunkStartHours, chunkEndHours);
+                    const result = await this.fetchTeleporterMessagesWithTimeRange(chunkStartHours, chunkEndHours, chunkInfo);
                     
                     // Add messages from this chunk to our collection
                     dayMessages = [...dayMessages, ...result.messages];
@@ -841,12 +1068,16 @@ class TeleporterService {
                         reachedTimeLimit: result.reachedTimeLimit,
                         dayMessages: dayMessages.length,
                         totalMessages: totalMessagesCollected + dayMessages.length,
-                        service: "l1beat-backend"
+                        service: "l1beat-backend",
+                        chunkInfo
                     });
                     
                     // If we hit the page limit, log a warning
                     if (result.hitPageLimit) {
-                        logger.warn(`Hit page limit in chunk ${i+1}/${CHUNKS_PER_DAY} for day ${currentDay}, some messages may be missing`);
+                        logger.warn(`Hit page limit in chunk ${i+1}/${CHUNKS_PER_DAY} for day ${currentDay}, some messages may be missing`, {
+                            chunkInfo,
+                            service: "l1beat-backend"
+                        });
                     }
                     
                     // Add a delay before fetching the next chunk to avoid rate limiting
@@ -1353,11 +1584,63 @@ class TeleporterService {
     /**
      * Fetch weekly teleporter data at once (168 hours)
      * This method is optimized for environments without strict timeout limits
+     * @param {string} requestId - Optional request ID for tracking
      * @returns {Promise<Object>} Object with success status and processed data
      */
-    async fetchWeeklyTeleporterDataAtOnce() {
+    async fetchWeeklyTeleporterDataAtOnce(requestId = 'unknown') {
         try {
-            logger.info('Starting weekly teleporter data fetch at once (168 hours)...');
+            logger.info('Starting weekly teleporter data fetch at once (168 hours)...', { requestId });
+            
+            // Check if an update is already in progress
+            const existingUpdate = await TeleporterUpdateState.findOne({ 
+                updateType: 'weekly',
+                state: 'in_progress'
+            });
+            
+            // If an update is already in progress, check if it's stale (hasn't been updated in 15 minutes)
+            if (existingUpdate) {
+                const lastUpdated = new Date(existingUpdate.lastUpdatedAt);
+                const timeSinceLastUpdate = Date.now() - lastUpdated.getTime();
+                
+                logger.info('Weekly update already in progress, checking if stale', {
+                    startedAt: existingUpdate.startedAt,
+                    lastUpdatedAt: existingUpdate.lastUpdatedAt,
+                    timeSinceLastUpdate: Math.round(timeSinceLastUpdate / 1000 / 60) + ' minutes',
+                    requestId
+                });
+                
+                // If it's been more than 15 minutes since the last update (weekly needs more time than daily)
+                if (timeSinceLastUpdate < 15 * 60 * 1000) {
+                    logger.info('Weekly update in progress and recently updated, skipping duplicate update', {
+                        startedAt: existingUpdate.startedAt,
+                        lastUpdatedAt: existingUpdate.lastUpdatedAt,
+                        timeSinceLastUpdate: Math.round(timeSinceLastUpdate / 1000 / 60) + ' minutes',
+                        requestId
+                    });
+                    
+                    return {
+                        success: true, 
+                        status: 'in_progress',
+                        message: 'Update already in progress'
+                    };
+                } else {
+                    // The update is stale, mark it as failed and continue with a new one
+                    logger.warn('Found stale weekly update, marking as failed and continuing with new update', {
+                        startedAt: existingUpdate.startedAt,
+                        lastUpdatedAt: existingUpdate.lastUpdatedAt,
+                        timeSinceLastUpdate: Math.round(timeSinceLastUpdate / 1000 / 60) + ' minutes',
+                        requestId
+                    });
+                    
+                    existingUpdate.state = 'failed';
+                    existingUpdate.lastUpdatedAt = new Date();
+                    existingUpdate.error = {
+                        message: 'Update timed out',
+                        details: `No updates for ${Math.round(timeSinceLastUpdate / 1000 / 60)} minutes`
+                    };
+                    await existingUpdate.save();
+                }
+            }
             
             // Create or update the update state
             let updateState = await TeleporterUpdateState.findOne({ updateType: 'weekly' });
@@ -1385,7 +1668,7 @@ class TeleporterService {
             await updateState.save();
             
             // Fetch all messages for the past 168 hours (7 days)
-            logger.info('Fetching teleporter messages for the past 168 hours...');
+            logger.info('Fetching teleporter messages for the past 168 hours...', { requestId });
             
             // We'll use a larger page size and increase MAX_PAGES since we're not concerned about timeouts
             const originalPageSize = this.PAGE_SIZE;

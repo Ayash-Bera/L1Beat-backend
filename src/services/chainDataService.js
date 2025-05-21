@@ -5,17 +5,36 @@ const logger = require('../utils/logger');
 class ChainDataService {
     constructor() {
         this.GLACIER_API_BASE = config.api.glacier.baseUrl;
+        this.GLACIER_API_KEY = process.env.GLACIER_API_KEY;
+        
+        // Log API key status (without revealing the actual key)
+        logger.info('ChainDataService - Glacier API Key status:', {
+            hasApiKey: !!this.GLACIER_API_KEY,
+            apiKeyLength: this.GLACIER_API_KEY ? this.GLACIER_API_KEY.length : 0
+        });
     }
 
     async fetchChainData() {
         try {
             logger.info('Fetching chains from Glacier API...');
+            
+            // Prepare headers with API key
+            const headers = {
+                'Accept': 'application/json',
+                'User-Agent': 'l1beat-backend',
+                'x-glacier-api-key': this.GLACIER_API_KEY
+            };
+            
+            // Log request details (without exposing full API key)
+            logger.info('Making Glacier chains API request:', {
+                endpoint: '/chains',
+                hasApiKey: !!headers['x-glacier-api-key'],
+                apiKeyPrefix: headers['x-glacier-api-key'] ? `${headers['x-glacier-api-key'].substring(0, 4)}...` : 'none'
+            });
+            
             const response = await axios.get(`${this.GLACIER_API_BASE}/chains`, {
                 timeout: config.api.glacier.timeout,
-                headers: {
-                    'Accept': 'application/json',
-                    'User-Agent': 'l1beat-backend'
-                }
+                headers
             });
             
             logger.info('Glacier API Response:', {
