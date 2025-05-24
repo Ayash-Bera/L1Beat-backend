@@ -291,17 +291,49 @@ class TeleporterService {
             const processedData = await this.processMessages(messages);
             logger.info(`[TELEPORTER DAILY] Processed into ${processedData.length} unique chain pairs`);
 
-            // Save to database (replace existing daily data)
-            await TeleporterMessage.deleteMany({ dataType: 'daily' });
+            // Clean up old daily data (older than 90 days) to prevent database bloat
+            const ninetyDaysAgo = new Date();
+            ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
             
-            const teleporterData = new TeleporterMessage({
-                updatedAt: new Date(),
-                messageCounts: processedData,
-                totalMessages: messages.length,
-                timeWindow: 24,
-                dataType: 'daily'
+            const deletedCount = await TeleporterMessage.deleteMany({ 
+                dataType: 'daily',
+                updatedAt: { $lt: ninetyDaysAgo }
             });
-            await teleporterData.save();
+            
+            if (deletedCount.deletedCount > 0) {
+                logger.info(`[TELEPORTER DAILY] Cleaned up ${deletedCount.deletedCount} old daily records (>90 days)`);
+            }
+
+            // Check if we already have data for today (to avoid duplicates)
+            const today = new Date();
+            const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+            const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+            
+            const existingTodayData = await TeleporterMessage.findOne({
+                dataType: 'daily',
+                updatedAt: { $gte: todayStart, $lt: todayEnd }
+            });
+
+            if (existingTodayData) {
+                // Update existing data for today
+                existingTodayData.updatedAt = new Date();
+                existingTodayData.messageCounts = processedData;
+                existingTodayData.totalMessages = messages.length;
+                existingTodayData.timeWindow = 24;
+                await existingTodayData.save();
+                logger.info(`[TELEPORTER DAILY] Updated existing daily snapshot for today`);
+            } else {
+                // Create new daily snapshot
+                const teleporterData = new TeleporterMessage({
+                    updatedAt: new Date(),
+                    messageCounts: processedData,
+                    totalMessages: messages.length,
+                    timeWindow: 24,
+                    dataType: 'daily'
+                });
+                await teleporterData.save();
+                logger.info(`[TELEPORTER DAILY] Created new daily snapshot`);
+            }
 
             // Update state to completed
             updateState.state = 'completed';
@@ -614,6 +646,57 @@ class TeleporterService {
      */
     async updateTeleporterData(requestId = 'unknown') {
         return await this.updateDailyData();
+    }
+
+    /**
+     * Get historical daily cross-chain message counts for the past N days
+     * @param {number} days - Number of days to retrieve (default: 30)
+     * @returns {Promise<Array>} Array of historical daily data
+     */
+    async getHistoricalDailyData(days = 30) {
+        try {
+            logger.info(`[TELEPORTER HISTORICAL] Fetching historical daily data for last ${days} days`);
+            
+            // Calculate the date threshold
+            const dateThreshold = new Date();
+            dateThreshold.setDate(dateThreshold.getDate() - days);
+            
+            // Query for historical daily snapshots
+            const historicalData = await TeleporterMessage.find({
+                dataType: 'daily',
+                updatedAt: { $gte: dateThreshold }
+            })
+            .sort({ updatedAt: -1 })
+            .lean(); // Use lean() for better performance since we're not modifying the docs
+            
+            logger.info(`[TELEPORTER HISTORICAL] Found ${historicalData.length} daily snapshots in the last ${days} days`);
+            
+            // Group by date to handle potential duplicate entries on the same day
+            const groupedByDate = new Map();
+            
+            historicalData.forEach(entry => {
+                const entryDate = new Date(entry.updatedAt);
+                const dateKey = `${entryDate.getFullYear()}-${(entryDate.getMonth() + 1).toString().padStart(2, '0')}-${entryDate.getDate().toString().padStart(2, '0')}`;
+                
+                // Keep only the most recent entry for each day
+                if (!groupedByDate.has(dateKey) || 
+                    new Date(entry.updatedAt) > new Date(groupedByDate.get(dateKey).updatedAt)) {
+                    groupedByDate.set(dateKey, entry);
+                }
+            });
+            
+            // Convert back to array and sort by date (most recent first)
+            const uniqueDailyData = Array.from(groupedByDate.values())
+                .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+            
+            logger.info(`[TELEPORTER HISTORICAL] Returning ${uniqueDailyData.length} unique daily snapshots`);
+            
+            return uniqueDailyData;
+            
+        } catch (error) {
+            logger.error('[TELEPORTER HISTORICAL] Error fetching historical daily data:', error);
+            throw error;
+        }
     }
 }
 

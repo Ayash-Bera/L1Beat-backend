@@ -126,15 +126,15 @@ async function backfillDateData(date) {
     logger.info(`Fetching data for ${date.toISOString().split('T')[0]} (${endHoursAgo}-${startHoursAgo} hours ago)`);
     
     // Fetch messages for this time range
-    const result = await teleporterService.fetchTeleporterMessagesWithTimeRange(startHoursAgo, endHoursAgo);
+    const messages = await teleporterService.fetchICMMessages(startHoursAgo);
     
-    if (result.messages.length === 0) {
+    if (messages.length === 0) {
       logger.warn(`No messages found for ${date.toISOString().split('T')[0]}`);
       return false;
     }
     
     // Process the messages
-    const processedData = await teleporterService.processMessages(result.messages);
+    const processedData = await teleporterService.processMessages(messages);
     
     // Create a timestamp at the end of the target day
     const timestamp = new Date(date);
@@ -144,14 +144,14 @@ async function backfillDateData(date) {
     const teleporterData = new TeleporterMessage({
       updatedAt: timestamp,
       messageCounts: processedData,
-      totalMessages: result.messages.length,
+      totalMessages: messages.length,
       timeWindow: 24,
       dataType: 'daily'
     });
     
     await teleporterData.save();
     
-    logger.info(`Saved teleporter data for ${date.toISOString().split('T')[0]} with ${processedData.length} chain pairs and ${result.messages.length} total messages`);
+    logger.info(`Saved teleporter data for ${date.toISOString().split('T')[0]} with ${processedData.length} chain pairs and ${messages.length} total messages`);
     return true;
   } catch (error) {
     logger.error(`Error backfilling data for ${date.toISOString().split('T')[0]}:`, { 
