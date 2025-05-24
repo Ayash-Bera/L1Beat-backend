@@ -8,9 +8,6 @@ const config = require('./config/config');
 const connectDB = require('./config/db');
 const chainRoutes = require('./routes/chainRoutes');
 const fetchAndUpdateData = require('./utils/fetchGlacierData');
-const tvlRoutes = require('./routes/tvlRoutes');
-const TVL = require('./models/tvl');
-const tvlService = require('./services/tvlService');
 const chainDataService = require('./services/chainDataService');
 const Chain = require('./models/chain');
 const chainService = require('./services/chainService');
@@ -106,33 +103,21 @@ const initializeDataUpdates = async () => {
       logger.error('No chains fetched from Glacier API');
     }
 
-    // Then update TVL
-    logger.info('Updating TVL data...');
-    await tvlService.updateTvlData();
-    
-    // Verify TVL update
-    const lastTVL = await TVL.findOne().sort({ date: -1 });
-    logger.info('TVL Update Result:', {
-      lastUpdate: lastTVL?.date ? new Date(lastTVL.date * 1000).toISOString() : 'none',
-      tvl: lastTVL?.tvl,
-      timestamp: new Date().toISOString()
-    });
-
     // Initial teleporter data update
-    logger.info('Updating initial teleporter data...');
+    logger.info('[TELEPORTER INIT] Updating initial daily teleporter data...');
     const teleporterService = require('./services/teleporterService');
     await teleporterService.updateTeleporterData();
 
     // Initialize weekly data if needed
     if (config.initWeeklyData) {
-      logger.info('Initializing weekly data...');
+      logger.info('[TELEPORTER INIT] Initializing weekly teleporter data...');
       (async () => {
         try {
-          // Use the new method that fetches all data at once
-          await teleporterService.fetchWeeklyTeleporterDataAtOnce();
-          logger.info('Weekly data initialization completed');
+          // Update weekly data
+          await teleporterService.updateWeeklyData();
+          logger.info('[TELEPORTER INIT] Weekly data initialization completed');
         } catch (error) {
-          logger.error('Error initializing weekly data:', {
+          logger.error('[TELEPORTER INIT] Error initializing weekly data:', {
             message: error.message,
             stack: error.stack
           });
@@ -146,17 +131,6 @@ const initializeDataUpdates = async () => {
 
   // Set up scheduled updates for both production and development
   logger.info('Setting up update schedules...');
-  
-  // TVL updates every 30 minutes
-  cron.schedule(config.cron.tvlUpdate, async () => {
-    try {
-      logger.info(`[CRON] Starting scheduled TVL update at ${new Date().toISOString()}`);
-      await tvlService.updateTvlData();
-      logger.info('[CRON] TVL update completed');
-    } catch (error) {
-      logger.error('[CRON] TVL update failed:', error);
-    }
-  });
 
   // Chain and TPS updates every hour
   cron.schedule(config.cron.chainUpdate, async () => {
@@ -179,19 +153,19 @@ const initializeDataUpdates = async () => {
   // Teleporter data updates every hour
   cron.schedule(config.cron.teleporterUpdate, async () => {
     try {
-      logger.info(`[CRON] Starting scheduled teleporter update at ${new Date().toISOString()}`);
+      logger.info(`[CRON TELEPORTER DAILY] Starting scheduled daily teleporter update at ${new Date().toISOString()}`);
       const teleporterService = require('./services/teleporterService');
       await teleporterService.updateTeleporterData();
-      logger.info('[CRON] Teleporter update completed');
+      logger.info('[CRON TELEPORTER DAILY] Daily teleporter update completed');
     } catch (error) {
-      logger.error('[CRON] Teleporter update failed:', error);
+      logger.error('[CRON TELEPORTER DAILY] Daily teleporter update failed:', error);
     }
   });
 
   // Weekly teleporter data updates once a day
   cron.schedule('0 0 * * *', async () => {
     try {
-      logger.info(`[CRON] Starting scheduled weekly teleporter update at ${new Date().toISOString()}`);
+      logger.info(`[CRON TELEPORTER WEEKLY] Starting scheduled weekly teleporter update at ${new Date().toISOString()}`);
       const teleporterService = require('./services/teleporterService');
       
       // Check if there's already an update in progress
@@ -200,116 +174,16 @@ const initializeDataUpdates = async () => {
         updateType: 'weekly',
         state: 'in_progress'
       });
-      
+
       if (existingUpdate) {
-        // Check if it's stale
-        const lastUpdated = new Date(existingUpdate.lastUpdatedAt);
-        const timeSinceUpdate = new Date().getTime() - lastUpdated.getTime();
-        
-        if (timeSinceUpdate > 5 * 60 * 1000) { // 5 minutes
-          logger.warn('[CRON] Found stale weekly update, resetting it...', {
-            lastUpdated: lastUpdated.toISOString(),
-            timeSinceUpdateMs: timeSinceUpdate
-          });
-          
-          existingUpdate.state = 'failed';
-          existingUpdate.lastUpdatedAt = new Date();
-          existingUpdate.error = {
-            message: 'Update timed out',
-            details: `No updates for ${Math.round(timeSinceUpdate / 1000 / 60)} minutes`
-          };
-          await existingUpdate.save();
-        } else {
-          logger.info('[CRON] Weekly update already in progress, skipping...', {
-            startedAt: existingUpdate.startedAt,
-            lastUpdatedAt: existingUpdate.lastUpdatedAt,
-            progress: existingUpdate.progress
-          });
-          return;
-        }
+        logger.info('[CRON TELEPORTER WEEKLY] Weekly teleporter update already in progress, skipping scheduled update');
+        return;
       }
-      
-      // Check if we have any weekly data
-      const anyWeeklyData = await TeleporterMessage.findOne({ dataType: 'weekly' });
-      
-      // If no data exists, log a special message
-      if (!anyWeeklyData) {
-        logger.info('[CRON] No weekly teleporter data found, initializing for the first time');
-      }
-      
-      // Start the update using the new method that fetches all data at once
-      await teleporterService.fetchWeeklyTeleporterDataAtOnce();
-      logger.info('[CRON] Weekly teleporter update completed');
+
+      await teleporterService.updateWeeklyData();
+      logger.info('[CRON TELEPORTER WEEKLY] Weekly teleporter update completed');
     } catch (error) {
-      logger.error('[CRON] Weekly teleporter update failed:', error);
-    }
-  });
-
-  // Check TPS data every 15 minutes
-  cron.schedule(config.cron.tpsVerification, async () => {
-    try {
-        logger.info(`[CRON] Starting TPS and Transaction Count verification at ${new Date().toISOString()}`);
-        
-        const currentTime = Math.floor(Date.now() / 1000);
-        const oneDayAgo = currentTime - (24 * 60 * 60);
-        
-        // Get chains with missing or old TPS data
-        const chains = await Chain.find().select('chainId').lean();
-        const tpsData = await TPS.find({
-            timestamp: { $gte: oneDayAgo }
-        }).distinct('chainId');
-        
-        // Get chains with missing or old TxCount data
-        const CumulativeTxCount = require('./models/cumulativeTxCount');
-        const txCountData = await CumulativeTxCount.find({
-            timestamp: { $gte: oneDayAgo }
-        }).distinct('chainId');
-
-        const chainsNeedingTpsUpdate = chains.filter(chain => 
-            !tpsData.includes(chain.chainId)
-        );
-        
-        const chainsNeedingTxCountUpdate = chains.filter(chain => 
-            !txCountData.includes(chain.chainId)
-        );
-
-        // Combine the chains needing updates (no duplicates)
-        const uniqueChainsNeedingUpdates = [...new Set([
-            ...chainsNeedingTpsUpdate.map(c => c.chainId),
-            ...chainsNeedingTxCountUpdate.map(c => c.chainId)
-        ])].map(chainId => ({ chainId }));
-
-        if (uniqueChainsNeedingUpdates.length > 0) {
-            logger.info(`[CRON] Found ${uniqueChainsNeedingUpdates.length} chains needing TPS/TxCount update`, {
-                tpsCount: chainsNeedingTpsUpdate.length,
-                txCountCount: chainsNeedingTxCountUpdate.length
-            });
-            
-            // Update chains in batches
-            const BATCH_SIZE = 5;
-            for (let i = 0; i < uniqueChainsNeedingUpdates.length; i += BATCH_SIZE) {
-                const batch = uniqueChainsNeedingUpdates.slice(i, i + BATCH_SIZE);
-                await Promise.all(
-                    batch.flatMap(chain => [
-                        // Update TPS if needed
-                        chainsNeedingTpsUpdate.some(c => c.chainId === chain.chainId) 
-                            ? tpsService.updateTpsData(chain.chainId) 
-                            : Promise.resolve(),
-                        // Update TxCount if needed
-                        chainsNeedingTxCountUpdate.some(c => c.chainId === chain.chainId) 
-                            ? tpsService.updateCumulativeTxCount(chain.chainId) 
-                            : Promise.resolve()
-                    ])
-                );
-                if (i + BATCH_SIZE < uniqueChainsNeedingUpdates.length) {
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                }
-            }
-        }
-
-        logger.info(`[CRON] TPS and Transaction Count verification complete at ${new Date().toISOString()}`);
-    } catch (error) {
-        logger.error('[CRON] TPS and Transaction Count verification failed:', error);
+      logger.error('[CRON TELEPORTER WEEKLY] Weekly teleporter update failed:', error);
     }
   });
 };
@@ -373,7 +247,6 @@ async function fixStaleUpdates() {
 
 // Routes
 app.use('/api', chainRoutes);
-app.use('/api', tvlRoutes);
 app.use('/api', tpsRoutes);
 app.use('/api', cumulativeTxCountRoutes);
 app.use('/api', teleporterRoutes);
@@ -430,7 +303,6 @@ const PORT = process.env.PORT || 5001;
 // Check for required environment variables before starting
 const requiredEnvVars = [
   'GLACIER_API_BASE',
-  'DEFILLAMA_API_BASE',
   'METRICS_API_BASE'
 ];
 

@@ -59,11 +59,6 @@ const validators = {
     validationRules.chainId
   ],
   
-  // TVL routes
-  getTvlHistory: [
-    validationRules.days
-  ],
-  
   // Teleporter routes
   getDailyCrossChainMessageCount: [],
   

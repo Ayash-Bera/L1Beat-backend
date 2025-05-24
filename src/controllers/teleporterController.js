@@ -83,8 +83,8 @@ exports.getWeeklyCrossChainMessageCount = async (req, res) => {
             
             logger.info('Weekly data is missing or older than 24 hours, triggering background update', { requestId });
             
-            // Trigger the update in the background using the new method that fetches all data at once
-            teleporterService.fetchWeeklyTeleporterDataAtOnce(requestId).catch(err => {
+            // Trigger the update in the background using the new method
+            teleporterService.updateWeeklyData().catch(err => {
                 logger.error('Error during automatic weekly data update:', {
                     message: err.message,
                     stack: err.stack,
@@ -124,8 +124,8 @@ exports.getWeeklyCrossChainMessageCount = async (req, res) => {
                 if (!recentData || (Date.now() - new Date(recentData.updatedAt).getTime() > 24 * 60 * 60 * 1000)) {
                     logger.info('Weekly data is missing or older than 24 hours, triggering new background update', { requestId });
                     
-                    // Trigger the update in the background using the new method that fetches all data at once
-                    teleporterService.fetchWeeklyTeleporterDataAtOnce(requestId).catch(err => {
+                    // Trigger the update in the background using the new method
+                    teleporterService.updateWeeklyData().catch(err => {
                         logger.error('Error during automatic weekly data update:', {
                             message: err.message,
                             stack: err.stack,

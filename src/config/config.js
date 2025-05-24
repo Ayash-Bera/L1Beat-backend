@@ -48,10 +48,6 @@ const config = {
         minDelayBetweenRequests: parseInt(process.env.GLACIER_MIN_DELAY || '2000') // At least 2s between requests
       }
     },
-    defillama: {
-      baseUrl: process.env.DEFILLAMA_API_BASE,
-      timeout: parseInt(process.env.DEFILLAMA_API_TIMEOUT || '30000')
-    },
     metrics: {
       baseUrl: process.env.METRICS_API_BASE,
       timeout: parseInt(process.env.METRICS_API_TIMEOUT || '30000'),
@@ -98,7 +94,6 @@ const config = {
   
   // Cron schedules
   cron: {
-    tvlUpdate: '*/30 * * * *', // Every 30 minutes
     chainUpdate: '0 * * * *',   // Every hour
     tpsVerification: '*/15 * * * *', // Every 15 minutes
     teleporterUpdate: '0 * * * *' // Every hour
@@ -107,7 +102,6 @@ const config = {
   // Cache TTLs (in milliseconds)
   cache: {
     chains: 5 * 60 * 1000,      // 5 minutes
-    tvlHistory: 15 * 60 * 1000, // 15 minutes
     tps: 5 * 60 * 1000,         // 5 minutes
     txCount: 5 * 60 * 1000,     // 5 minutes
     teleporter: 5 * 60 * 1000   // 5 minutes
