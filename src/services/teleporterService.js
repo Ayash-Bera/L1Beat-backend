@@ -163,22 +163,72 @@ class TeleporterService {
     }
 
     /**
+     * Fetch chain data and create chainId to chainName mapping
+     * @returns {Promise<Object>} Mapping of chainId to chainName
+     */
+    async getChainMapping() {
+        try {
+            // Check if we have cached mapping (cache for 1 hour)
+            if (this.chainMapping && this.chainMappingLastUpdate && 
+                (Date.now() - this.chainMappingLastUpdate) < (60 * 60 * 1000)) {
+                return this.chainMapping;
+            }
+
+            logger.info('Fetching chain data for name mapping...');
+            
+            // Fetch chain data from our own API
+            const response = await axios.get(`http://localhost:${process.env.PORT || 5001}/api/chains`, {
+                timeout: this.TIMEOUT,
+                headers: {
+                    'Accept': 'application/json',
+                    'User-Agent': 'l1beat-backend-internal'
+                }
+            });
+
+            const chains = response.data || [];
+            const mapping = {};
+
+            for (const chain of chains) {
+                if (chain.chainId && chain.chainName) {
+                    mapping[chain.chainId] = chain.chainName;
+                }
+            }
+
+            // Cache the mapping
+            this.chainMapping = mapping;
+            this.chainMappingLastUpdate = Date.now();
+
+            logger.info(`Created chain mapping for ${Object.keys(mapping).length} chains`);
+            return mapping;
+
+        } catch (error) {
+            logger.error('Error fetching chain mapping:', error);
+            // Return empty mapping as fallback
+            return this.chainMapping || {};
+        }
+    }
+
+    /**
      * Process messages to count by chain pairs
      * @param {Array} messages - Array of ICM messages
      * @returns {Array} Processed message counts
      */
-    processMessages(messages) {
+    async processMessages(messages) {
         const counts = {};
 
         logger.info(`Processing ${messages.length} ICM messages`);
+
+        // Get chain mapping
+        const chainMapping = await this.getChainMapping();
 
         for (const message of messages) {
             if (!message.sourceEvmChainId || !message.destinationEvmChainId) {
                 continue; // Skip messages without chain IDs
             }
 
-            const sourceChain = `Chain ${message.sourceEvmChainId}`;
-            const destinationChain = `Chain ${message.destinationEvmChainId}`;
+            // Use chain names if available, fallback to "Chain {id}" format
+            const sourceChain = chainMapping[message.sourceEvmChainId] || `Chain ${message.sourceEvmChainId}`;
+            const destinationChain = chainMapping[message.destinationEvmChainId] || `Chain ${message.destinationEvmChainId}`;
             const key = `${sourceChain}|${destinationChain}`;
 
             if (!counts[key]) {
@@ -193,7 +243,7 @@ class TeleporterService {
 
         const result = Object.values(counts).sort((a, b) => b.messageCount - a.messageCount);
         
-        logger.info(`Processed messages into ${result.length} chain pairs`);
+        logger.info(`Processed messages into ${result.length} chain pairs with actual chain names`);
         return result;
     }
 
@@ -238,7 +288,7 @@ class TeleporterService {
             const messages = await this.fetchICMMessages(24);
             logger.info(`[TELEPORTER DAILY] Fetched ${messages.length} raw messages from Glacier API`);
             
-            const processedData = this.processMessages(messages);
+            const processedData = await this.processMessages(messages);
             logger.info(`[TELEPORTER DAILY] Processed into ${processedData.length} unique chain pairs`);
 
             // Save to database (replace existing daily data)
@@ -323,7 +373,7 @@ class TeleporterService {
             const messages = await this.fetchICMMessages(168); // 7 * 24 = 168 hours
             logger.info(`[TELEPORTER WEEKLY] Fetched ${messages.length} raw messages from Glacier API`);
             
-            const processedData = this.processMessages(messages);
+            const processedData = await this.processMessages(messages);
             logger.info(`[TELEPORTER WEEKLY] Processed into ${processedData.length} unique chain pairs`);
 
             // Save to database (replace existing weekly data)
