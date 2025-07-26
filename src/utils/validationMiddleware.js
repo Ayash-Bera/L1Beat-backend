@@ -73,11 +73,49 @@ const validators = {
       .withMessage('Days must be an integer between 1 and 90')
       .toInt()
   ],
-  
   // Generic chainId parameter validator
   getChainIdParam: [
     validationRules.chainId
+  ],
+
+  // Blog routes validators
+  getBlogPosts: [
+    query('limit')
+      .optional()
+      .isInt({ min: 1, max: 100 })
+      .withMessage('Limit must be an integer between 1 and 100')
+      .toInt(),
+    query('offset')
+      .optional()
+      .isInt({ min: 0 })
+      .withMessage('Offset must be a non-negative integer')
+      .toInt(),
+    query('tag')
+      .optional()
+      .isString()
+      .trim()
+      .isLength({ min: 1, max: 50 })
+      .withMessage('Tag must be a string between 1 and 50 characters')
+  ],
+
+  getBlogPostBySlug: [
+    param('slug')
+      .trim()
+      .notEmpty()
+      .withMessage('Slug is required')
+      .isString()
+      .withMessage('Slug must be a string')
+      .isLength({ min: 1, max: 100 })
+      .withMessage('Slug must be between 1 and 100 characters')
+      .matches(/^[a-z0-9-]+$/)
+      .withMessage('Slug can only contain lowercase letters, numbers, and hyphens')
+  ],
+
+  syncBlogPosts: [
+    // No specific validation needed for sync endpoint
+    // Could add rate limiting headers validation if needed
   ]
+  
 };
 
 module.exports = {

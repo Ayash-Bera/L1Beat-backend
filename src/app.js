@@ -17,6 +17,9 @@ const TPS = require('./models/tps');
 const cumulativeTxCountRoutes = require('./routes/cumulativeTxCountRoutes');
 const teleporterRoutes = require('./routes/teleporterRoutes');
 const logger = require('./utils/logger');
+const blogRoutes = require('./routes/blogRoutes');
+const substackService = require('./services/substackService');
+
 
 const app = express();
 
@@ -30,7 +33,7 @@ if (isVercel || config.isProduction) {
 }
 
 // Add debugging logs
-logger.info('Starting server', { 
+logger.info('Starting server', {
   environment: config.env,
   mongoDbUri: config.isProduction
     ? 'PROD URI is set: ' + !!process.env.PROD_MONGODB_URI
@@ -57,10 +60,10 @@ if (config.env === 'development') {
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: [
-      'Content-Type', 
-      'Authorization', 
-      'X-Requested-With', 
-      'Accept', 
+      'Content-Type',
+      'Authorization',
+      'X-Requested-With',
+      'Accept',
       'Origin',
       'Cache-Control'
     ]
@@ -76,7 +79,7 @@ app.use(express.json());
 // Single initialization point for data updates
 const initializeDataUpdates = async () => {
   logger.info(`[${config.env}] Initializing data updates at ${new Date().toISOString()}`);
-  
+
   try {
     // First update chains
     logger.info('Fetching initial chain data...');
@@ -92,7 +95,7 @@ const initializeDataUpdates = async () => {
         await tpsService.updateCumulativeTxCount(chain.chainId);
       }
       logger.info(`Updated ${chains.length} chains in database`);
-      
+
       // Verify chains were saved
       const savedChains = await Chain.find();
       logger.info('Chains in database:', {
@@ -102,6 +105,20 @@ const initializeDataUpdates = async () => {
     } else {
       logger.error('No chains fetched from Glacier API');
     }
+
+    // Initial blog sync
+    logger.info('[BLOG INIT] Updating initial blog data...');
+    (async () => {
+      try {
+        await substackService.syncArticles('initial-sync');
+        logger.info('[BLOG INIT] Blog data initialization completed');
+      } catch (error) {
+        logger.error('[BLOG INIT] Error initializing blog data:', {
+          message: error.message,
+          stack: error.stack
+        });
+      }
+    })();
 
     // Initial teleporter data update
     logger.info('[TELEPORTER INIT] Updating initial daily teleporter data...');
@@ -162,15 +179,26 @@ const initializeDataUpdates = async () => {
     }
   });
 
+  // Blog RSS sync every 12 hours
+  cron.schedule(config.cron.blogSync, async () => {
+    try {
+      logger.info(`[CRON BLOG] Starting scheduled blog sync at ${new Date().toISOString()}`);
+      const result = await substackService.syncArticles('scheduled-sync');
+      logger.info('[CRON BLOG] Blog sync completed:', result);
+    } catch (error) {
+      logger.error('[CRON BLOG] Blog sync failed:', error);
+    }
+  });
+
   // Weekly teleporter data updates once a day
   cron.schedule('0 0 * * *', async () => {
     try {
       logger.info(`[CRON TELEPORTER WEEKLY] Starting scheduled weekly teleporter update at ${new Date().toISOString()}`);
       const teleporterService = require('./services/teleporterService');
-      
+
       // Check if there's already an update in progress
       const { TeleporterUpdateState, TeleporterMessage } = require('./models/teleporterMessage');
-      const existingUpdate = await TeleporterUpdateState.findOne({ 
+      const existingUpdate = await TeleporterUpdateState.findOne({
         updateType: 'weekly',
         state: 'in_progress'
       });
@@ -192,7 +220,7 @@ const initializeDataUpdates = async () => {
 connectDB().then(async () => {
   // First, check for and fix any stale teleporter updates
   await fixStaleUpdates();
-  
+
   // Then continue with normal initialization
   initializeDataUpdates();
 });
@@ -204,15 +232,15 @@ connectDB().then(async () => {
 async function fixStaleUpdates() {
   try {
     logger.info('Checking for stale teleporter updates on startup...');
-    
+
     // Import required models
     const { TeleporterUpdateState } = require('./models/teleporterMessage');
-    
+
     // Find any in_progress updates
     const staleUpdates = await TeleporterUpdateState.find({
       state: 'in_progress'
     });
-    
+
     if (staleUpdates.length > 0) {
       logger.warn(`Found ${staleUpdates.length} stale teleporter updates on startup, marking as failed`, {
         updates: staleUpdates.map(u => ({
@@ -222,7 +250,7 @@ async function fixStaleUpdates() {
           timeSinceLastUpdate: Math.round((Date.now() - new Date(u.lastUpdatedAt).getTime()) / (60 * 1000)) + ' minutes'
         }))
       });
-      
+
       // Mark all stale updates as failed
       for (const update of staleUpdates) {
         update.state = 'failed';
@@ -250,6 +278,7 @@ app.use('/api', chainRoutes);
 app.use('/api', tpsRoutes);
 app.use('/api', cumulativeTxCountRoutes);
 app.use('/api', teleporterRoutes);
+app.use('/api', blogRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -279,7 +308,7 @@ if (isDevelopment) {
 // Error handling middleware
 app.use((err, req, res, next) => {
   logger.error('Error:', { message: err.message, stack: err.stack, path: req.path });
-  
+
   // Send proper JSON response
   res.status(500).json({
     error: 'Internal Server Error',
@@ -308,7 +337,7 @@ const requiredEnvVars = [
 
 const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
 if (missingEnvVars.length > 0) {
-  logger.error('Missing required environment variables:', { 
+  logger.error('Missing required environment variables:', {
     missing: missingEnvVars.join(', ')
   });
   logger.error('Please check your .env file and make sure these variables are set.');

@@ -7,30 +7,30 @@ const config = {
   env: process.env.NODE_ENV || 'development',
   isDevelopment: process.env.NODE_ENV === 'development',
   isProduction: process.env.NODE_ENV === 'production',
-  
+
   // Server
   server: {
     port: parseInt(process.env.PORT || '5001'),
     host: process.env.HOST || '0.0.0.0',
   },
-  
+
   // Database
   db: {
-    uri: process.env.NODE_ENV === 'production' 
-      ? process.env.PROD_MONGODB_URI 
+    uri: process.env.NODE_ENV === 'production'
+      ? process.env.PROD_MONGODB_URI
       : process.env.DEV_MONGODB_URI,
     options: {
       useNewUrlParser: true,
       useUnifiedTopology: true,
     }
   },
-  
+
   // API Keys
   apiKeys: {
     admin: process.env.ADMIN_API_KEY,
     update: process.env.UPDATE_API_KEY
   },
-  
+
   // External APIs
   api: {
     glacier: {
@@ -64,24 +64,24 @@ const config = {
       // Example: 'mychain': 'https://api.mychain.com/validators'
     }
   },
-  
+
   // CORS
   cors: {
-    origin: process.env.NODE_ENV === 'development' 
-      ? ['http://localhost:5173', 'http://localhost:4173'] 
+    origin: process.env.NODE_ENV === 'development'
+      ? ['http://localhost:5173', 'http://localhost:4173']
       : ['https://l1beat.io', 'https://www.l1beat.io', 'http://localhost:4173', 'http://localhost:5173'],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: [
-      'Content-Type', 
-      'Authorization', 
-      'X-Requested-With', 
-      'Accept', 
+      'Content-Type',
+      'Authorization',
+      'X-Requested-With',
+      'Accept',
       'Origin',
       'Cache-Control'
     ]
   },
-  
+
   // Rate limiting
   rateLimit: {
     windowMs: 15 * 60 * 1000, // 15 minutes
@@ -91,20 +91,49 @@ const config = {
     // Skip client IP validation when running behind a proxy
     validate: { xForwardedForHeader: false }
   },
-  
+
   // Cron schedules
   cron: {
     chainUpdate: '0 * * * *',   // Every hour
     tpsVerification: '*/15 * * * *', // Every 15 minutes
     teleporterUpdate: '0 * * * *' // Every hour
   },
-  
+
   // Cache TTLs (in milliseconds)
   cache: {
     chains: 5 * 60 * 1000,      // 5 minutes
     tps: 5 * 60 * 1000,         // 5 minutes
     txCount: 5 * 60 * 1000,     // 5 minutes
     teleporter: 5 * 60 * 1000   // 5 minutes
+  },
+
+    // Blog/Substack integration
+    blog: {
+    rssUrl: process.env.SUBSTACK_RSS_URL || 'https://ayashbera.substack.com/feed',
+    timeout: parseInt(process.env.BLOG_API_TIMEOUT || '30000'),
+    syncInterval: parseInt(process.env.BLOG_SYNC_INTERVAL || '43200000'), // 12 hours in milliseconds
+    rateLimit: {
+      requestsPerHour: parseInt(process.env.BLOG_RATE_LIMIT || '10'),
+      retryDelay: parseInt(process.env.BLOG_RETRY_DELAY || '5000'),
+      maxRetries: parseInt(process.env.BLOG_MAX_RETRIES || '3')
+    }
+  },
+
+// Update your existing cron object:
+  cron: {
+    chainUpdate: '0 * * * *',   // Every hour
+    tpsVerification: '*/15 * * * *', // Every 15 minutes
+    teleporterUpdate: '0 * * * *', // Every hour
+    blogSync: '0 */12 * * *' // Every 12 hours
+  },
+
+  // Update your existing cache object:
+  cache: {
+    chains: 5 * 60 * 1000,      // 5 minutes
+    tps: 5 * 60 * 1000,         // 5 minutes
+    txCount: 5 * 60 * 1000,     // 5 minutes
+    teleporter: 5 * 60 * 1000,  // 5 minutes
+    blog: 10 * 60 * 1000        // 10 minutes
   }
 };
 
