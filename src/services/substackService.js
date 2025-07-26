@@ -31,7 +31,8 @@ class SubstackService {
                 timeout: this.TIMEOUT,
                 headers: {
                     'Accept': 'application/rss+xml, application/xml, text/xml',
-                    'User-Agent': 'l1beat-blog-service'
+                    'User-Agent': 'l1beat-blog-service',
+                    'Cache-Control': 'no-cache'
                 }
             });
 
@@ -58,6 +59,8 @@ class SubstackService {
 
             const channel = parsedData.rss.channel;
             const items = Array.isArray(channel.item) ? channel.item : [channel.item];
+            console.log('DEBUG - Raw items:', JSON.stringify(items, null, 2));
+            console.log('DEBUG - Items count:', items ? items.length : 0);
 
             logger.info(`[SUBSTACK RSS] Parsed RSS feed [${requestId}]`, {
                 channelTitle: channel.title,
@@ -100,13 +103,13 @@ class SubstackService {
                     const slug = this.generateSlug(title);
 
                     // Extract content (prefer content:encoded over description)
-                    let content = item['content:encoded'] || item.description || '';
+                    let rawContent = item['content:encoded'] || item.description || '';
 
-                    // Clean and process content
-                    content = this.cleanContent(content);
+                    // Parse content structure
+                    const { subtitle, mainContent, cleanContent } = this.cleanContent(rawContent);
 
-                    // Generate excerpt from content
-                    const excerpt = this.generateExcerpt(content);
+                    // Generate excerpt from main content only
+                    const excerpt = this.generateExcerpt(mainContent);
 
                     // Extract Substack ID from GUID or link
                     const substackId = this.extractSubstackId(item.guid || link);
@@ -119,7 +122,9 @@ class SubstackService {
                     return {
                         title: title.trim(),
                         slug: slug,
-                        content: content,
+                        subtitle: subtitle,
+                        content: cleanContent,
+                        mainContent: mainContent,
                         excerpt: excerpt,
                         publishedAt: pubDate,
                         author: 'Ayash Bera',
@@ -137,9 +142,9 @@ class SubstackService {
                             link: item.link
                         }
                     });
-                    return null; // Return null for failed items
+                    return null;
                 }
-            }).filter(post => post !== null); // Remove null items
+            }).filter(post => post !== null);
 
             logger.info(`[SUBSTACK PROCESS] Successfully processed ${processedPosts.length} posts [${requestId}]`);
             return processedPosts;
@@ -182,16 +187,22 @@ class SubstackService {
                 try {
                     // Calculate reading time
                     const readingTime = this.calculateReadingTime(postData.content);
-                    postData.readingTime = readingTime;
-                    postData.lastSynced = new Date();
-                    postData.syncStatus = 'synced';
+
+                    // Prepare data for database
+                    const dbData = {
+                        ...postData,
+                        readTime: readingTime, // Fixed field name
+                        lastSynced: new Date(),
+                        syncStatus: 'synced',
+                        // Ensure new fields have defaults
+                        subtitle: postData.subtitle || '',
+                        mainContent: postData.mainContent || postData.content
+                    };
 
                     // Update or create post
                     const result = await BlogPost.findOneAndUpdate(
                         { substackId: postData.substackId },
-                        {
-                            $set: postData
-                        },
+                        { $set: dbData },
                         {
                             upsert: true,
                             new: true,
@@ -342,15 +353,62 @@ class SubstackService {
             .substring(0, 100);
     }
 
+    /**
+     * Clean and parse content structure
+     * @param {string} content - Raw content from RSS
+     * @returns {Object} Parsed content with subtitle and main content
+     */
     cleanContent(content) {
-        // Remove any unwanted HTML or clean up content
-        // You can add more cleaning logic here
-        return content.trim();
+        if (!content) return { subtitle: '', mainContent: '', cleanContent: '' };
+
+        // Remove CDATA wrappers if present
+        let cleanContent = content.replace(/<!\[CDATA\[(.*?)\]\]>/gs, '$1');
+
+        // Convert HTML to text for parsing
+        const textContent = cleanContent.replace(/<[^>]*>/g, '\n').replace(/\n+/g, '\n').trim();
+
+        // Split content into lines
+        const lines = textContent.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+
+        let subtitle = '';
+        let mainContentLines = [];
+
+        if (lines.length > 0) {
+            // Check if first non-empty line looks like a subtitle
+            const firstLine = lines[0];
+            const isSubtitle = firstLine.length > 0 && firstLine.length < 100 &&
+                !firstLine.endsWith('.') &&
+                !firstLine.includes('http') &&
+                lines.length > 1;
+
+            if (isSubtitle) {
+                subtitle = firstLine;
+                mainContentLines = lines.slice(1);
+            } else {
+                mainContentLines = lines;
+            }
+        }
+
+        const mainContent = mainContentLines.join('\n\n');
+
+        return {
+            subtitle: subtitle,
+            mainContent: mainContent,
+            cleanContent: cleanContent.trim()
+        };
     }
 
-    generateExcerpt(content, maxLength = 200) {
+    /**
+     * Generate excerpt from main content only (excluding subtitle)
+     * @param {string} mainContent - Main content without subtitle
+     * @param {number} maxLength - Maximum length
+     * @returns {string} Excerpt
+     */
+    generateExcerpt(mainContent, maxLength = 200) {
+        if (!mainContent) return '';
+
         // Remove HTML tags
-        const textContent = content.replace(/<[^>]*>/g, ' ');
+        const textContent = mainContent.replace(/<[^>]*>/g, ' ');
         // Clean up whitespace
         const cleanText = textContent.replace(/\s+/g, ' ').trim();
         // Truncate to maxLength

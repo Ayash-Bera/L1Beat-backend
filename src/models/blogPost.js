@@ -1,7 +1,6 @@
 const mongoose = require('mongoose');
 
 const blogPostSchema = new mongoose.Schema({
-    // Basic post information
     title: {
         type: String,
         required: true,
@@ -13,127 +12,75 @@ const blogPostSchema = new mongoose.Schema({
         unique: true,
         trim: true
     },
+    subtitle: {  // NEW FIELD
+        type: String,
+        trim: true,
+        default: ''
+    },
+    excerpt: {
+        type: String,
+        required: true,
+        trim: true
+    },
     content: {
         type: String,
         required: true
     },
-    excerpt: {
+    mainContent: {  // NEW FIELD - content without subtitle
         type: String,
-        trim: true
+        trim: true,
+        default: ''
     },
-
-    // Publication details
+    author: {
+        type: String,
+        default: 'L1Beat Team'
+    },
     publishedAt: {
         type: Date,
         required: true
     },
-    author: {
-        type: String,
-        default: 'Ayash Bera'
-    },
-
-    // Substack specific data
-    substackUrl: {
-        type: String,
-        required: true,
-        unique: true
-    },
-    substackId: {
-        type: String,
-        required: true,
-        unique: true
-    },
-
-    // Content metadata
-    readingTime: {
-        type: Number, // in minutes
-        default: 0
+    updatedAt: {
+        type: Date,
+        default: Date.now
     },
     tags: [{
         type: String,
         trim: true
     }],
-    categories: [{
-        type: String,
-        trim: true
-    }],
-
-    // Sync and caching information
-    lastSynced: {
-        type: Date,
-        default: Date.now
-    },
-    syncStatus: {
-        type: String,
-        enum: ['pending', 'synced', 'failed'],
-        default: 'pending'
-    },
-
-    // Engagement metrics (if we want to track)
     views: {
         type: Number,
         default: 0
     },
-
-    // System timestamps
-    createdAt: {
-        type: Date,
-        default: Date.now
+    imageUrl: {
+        type: String,
+        trim: true
     },
-    updatedAt: {
-        type: Date,
-        default: Date.now
+    readTime: {
+        type: Number, // in minutes
+        default: 5
+    },
+    sourceUrl: {
+        type: String,
+        trim: true
+    },
+    syncStatus: {
+        type: String,
+        enum: ['pending', 'synced', 'error'],
+        default: 'pending'
+    },
+    substackId: {
+        type: String,
+        unique: true,
+        sparse: true
     }
+}, {
+    timestamps: true
 });
 
-// Indexes for efficient queries (following your existing patterns)
-blogPostSchema.index({ publishedAt: -1 }); // Most recent first
-blogPostSchema.index({ slug: 1 }); // For individual post lookup
-blogPostSchema.index({ substackId: 1 }); // For sync operations
-blogPostSchema.index({ syncStatus: 1 }); // For sync monitoring
-blogPostSchema.index({ tags: 1 }); // For tag-based queries
-blogPostSchema.index({ categories: 1 }); // For category-based queries
-blogPostSchema.index({ lastSynced: -1 }); // For sync monitoring
-
-// Compound indexes
-blogPostSchema.index({ publishedAt: -1, syncStatus: 1 }); // Published posts that are synced
-blogPostSchema.index({ author: 1, publishedAt: -1 }); // Posts by author, recent first
-
-// Pre-save middleware to update the updatedAt timestamp
-blogPostSchema.pre('save', function (next) {
-    this.updatedAt = new Date();
-    next();
-});
-
-// Instance method to calculate reading time (roughly 200 words per minute)
-blogPostSchema.methods.calculateReadingTime = function () {
-    if (!this.content) return 0;
-
-    // Remove HTML tags for word count
-    const textContent = this.content.replace(/<[^>]*>/g, ' ');
-    const wordCount = textContent.trim().split(/\s+/).length;
-    const readingTime = Math.ceil(wordCount / 200);
-
-    return readingTime;
-};
-
-// Static method to find recent posts (following your service patterns)
-blogPostSchema.statics.findRecentPosts = function (limit = 10) {
-    return this.find({ syncStatus: 'synced' })
-        .sort({ publishedAt: -1 })
-        .limit(limit)
-        .lean();
-};
-
-// Static method to find posts by tag
-blogPostSchema.statics.findByTag = function (tag, limit = 10) {
-    return this.find({
-        tags: { $in: [tag] },
-        syncStatus: 'synced'
-    })
-        .sort({ publishedAt: -1 })
-        .limit(limit)
-        .lean();
-};
+// Indexes for better query performance
+blogPostSchema.index({ publishedAt: -1 });
+blogPostSchema.index({ slug: 1 });
+blogPostSchema.index({ tags: 1 });
+blogPostSchema.index({ syncStatus: 1 });
 
 module.exports = mongoose.model('BlogPost', blogPostSchema);
