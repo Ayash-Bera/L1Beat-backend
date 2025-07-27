@@ -82,12 +82,9 @@ class SubstackService {
         }
     }
 
-    /**
-     * Process RSS items into blog post format
-     * @param {Array} items - RSS items
-     * @param {string} requestId - Request ID for tracking
-     * @returns {Array} Processed blog posts
-     */
+    // Fixed processRSSItems method for substackService.js
+    // This addresses the subtitle extraction issue by using the correct RSS fields
+
     processRSSItems(items, requestId = 'unknown') {
         try {
             logger.info(`[SUBSTACK PROCESS] Processing ${items.length} RSS items [${requestId}]`);
@@ -102,13 +99,30 @@ class SubstackService {
                     // Generate slug from title
                     const slug = this.generateSlug(title);
 
-                    // Extract content (prefer content:encoded over description)
-                    let rawContent = item['content:encoded'] || item.description || '';
+                    // FIXED: Extract subtitle from description field (Substack puts it there)
+                    let subtitle = '';
+                    let mainContent = '';
+                    let cleanContent = '';
 
-                    // Parse content structure
-                    const { subtitle, mainContent, cleanContent } = this.cleanContent(rawContent);
+                    // Get subtitle from description field
+                    const description = item.description || '';
+                    if (description && description.trim()) {
+                        subtitle = this.cleanSubtitle(description);
+                    }
 
-                    // Generate excerpt from main content only
+                    // Get main content from content:encoded
+                    const rawContent = item['content:encoded'] || '';
+                    if (rawContent) {
+                        cleanContent = this.cleanMainContent(rawContent);
+                        mainContent = cleanContent;
+                    } else if (description && !subtitle) {
+                        // Fallback: if no content:encoded and description doesn't look like subtitle
+                        cleanContent = this.cleanMainContent(description);
+                        mainContent = cleanContent;
+                        subtitle = ''; // No subtitle in this case
+                    }
+
+                    // Generate excerpt from main content only (excluding subtitle)
                     const excerpt = this.generateExcerpt(mainContent);
 
                     // Extract Substack ID from GUID or link
@@ -117,7 +131,11 @@ class SubstackService {
                     // Extract categories/tags if available
                     const tags = this.extractTags(item.category);
 
-                    logger.debug(`[SUBSTACK PROCESS] Processed item ${index + 1}: ${title} [${requestId}]`);
+                    logger.debug(`[SUBSTACK PROCESS] Processed item ${index + 1}: ${title} [${requestId}]`, {
+                        hasSubtitle: !!subtitle,
+                        subtitleLength: subtitle.length,
+                        contentLength: mainContent.length
+                    });
 
                     return {
                         title: title.trim(),
@@ -353,49 +371,50 @@ class SubstackService {
             .substring(0, 100);
     }
 
+
     /**
-     * Clean and parse content structure
-     * @param {string} content - Raw content from RSS
-     * @returns {Object} Parsed content with subtitle and main content
+     * Clean subtitle from RSS description field
+     * @param {string} description - RSS description field
+     * @returns {string} Clean subtitle
      */
-    cleanContent(content) {
-        if (!content) return { subtitle: '', mainContent: '', cleanContent: '' };
+    cleanSubtitle(description) {
+        if (!description) return '';
+
+        // Remove HTML tags
+        let subtitle = description.replace(/<[^>]*>/g, '').trim();
+
+        // Remove common Substack prefixes/suffixes
+        subtitle = subtitle.replace(/^(Subtitle:|Summary:)/i, '').trim();
+
+        // Limit length for subtitles (should be concise)
+        if (subtitle.length > 200) {
+            subtitle = subtitle.substring(0, 200).trim() + '...';
+        }
+
+        // Check if this looks like a subtitle vs main content
+        // Subtitles are usually shorter and don't have multiple sentences
+        const sentences = subtitle.split(/[.!?]+/).filter(s => s.trim().length > 0);
+        if (sentences.length > 3 || subtitle.length > 150) {
+            // This looks more like content than a subtitle
+            return '';
+        }
+
+        return subtitle;
+    }
+
+    /**
+     * Clean main content from content:encoded field
+     * @param {string} content - Raw HTML content
+     * @returns {string} Clean content
+     */
+    cleanMainContent(content) {
+        if (!content) return '';
 
         // Remove CDATA wrappers if present
         let cleanContent = content.replace(/<!\[CDATA\[(.*?)\]\]>/gs, '$1');
 
-        // Convert HTML to text for parsing
-        const textContent = cleanContent.replace(/<[^>]*>/g, '\n').replace(/\n+/g, '\n').trim();
-
-        // Split content into lines
-        const lines = textContent.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-
-        let subtitle = '';
-        let mainContentLines = [];
-
-        if (lines.length > 0) {
-            // Check if first non-empty line looks like a subtitle
-            const firstLine = lines[0];
-            const isSubtitle = firstLine.length > 0 && firstLine.length < 100 &&
-                !firstLine.endsWith('.') &&
-                !firstLine.includes('http') &&
-                lines.length > 1;
-
-            if (isSubtitle) {
-                subtitle = firstLine;
-                mainContentLines = lines.slice(1);
-            } else {
-                mainContentLines = lines;
-            }
-        }
-
-        const mainContent = mainContentLines.join('\n\n');
-
-        return {
-            subtitle: subtitle,
-            mainContent: mainContent,
-            cleanContent: cleanContent.trim()
-        };
+        // Keep as HTML for rich content display
+        return cleanContent.trim();
     }
 
     /**
