@@ -59,6 +59,124 @@ exports.getAllPosts = async (req, res) => {
 };
 
 /**
+ * Get related blog posts based on shared tags
+ */
+exports.getRelatedPosts = async (req, res) => {
+    try {
+        const { slug } = req.params;
+        const { limit = 4 } = req.query;
+
+        logger.info(`[BLOG CONTROLLER] Get related posts for: ${slug}`);
+
+        // First, get the current post to extract its tags
+        const currentPost = await BlogPost.findOne({
+            slug: slug,
+            syncStatus: 'synced'
+        }).select('tags title').lean();
+
+        if (!currentPost) {
+            logger.warn(`[BLOG CONTROLLER] Post not found for related posts: ${slug}`);
+            return res.status(404).json({
+                success: false,
+                error: 'Post not found',
+                message: `No post found with slug: ${slug}`
+            });
+        }
+
+        if (!currentPost.tags || currentPost.tags.length === 0) {
+            logger.info(`[BLOG CONTROLLER] No tags found for post: ${slug}, returning empty related posts`);
+            return res.json({
+                success: true,
+                data: [],
+                metadata: {
+                    currentPost: currentPost.title,
+                    matchedTags: [],
+                    retrievedAt: new Date().toISOString()
+                }
+            });
+        }
+
+        // Find related posts using aggregation pipeline for better performance
+        const relatedPosts = await BlogPost.aggregate([
+            // Match posts that share at least one tag and aren't the current post
+            {
+                $match: {
+                    syncStatus: 'synced',
+                    slug: { $ne: slug },
+                    tags: { $in: currentPost.tags }
+                }
+            },
+            // Add a field to count matching tags
+            {
+                $addFields: {
+                    matchingTagsCount: {
+                        $size: {
+                            $setIntersection: ['$tags', currentPost.tags]
+                        }
+                    },
+                    matchingTags: {
+                        $setIntersection: ['$tags', currentPost.tags]
+                    }
+                }
+            },
+            // Sort by number of matching tags (descending), then by publish date (descending)
+            {
+                $sort: {
+                    matchingTagsCount: -1,
+                    publishedAt: -1
+                }
+            },
+            // Limit results
+            {
+                $limit: parseInt(limit)
+            },
+            // Project only needed fields
+            {
+                $project: {
+                    title: 1,
+                    slug: 1,
+                    excerpt: 1,
+                    publishedAt: 1,
+                    author: 1,
+                    tags: 1,
+                    imageUrl: 1,
+                    readTime: 1,
+                    views: 1,
+                    matchingTagsCount: 1,
+                    matchingTags: 1
+                }
+            }
+        ]);
+
+        const response = {
+            success: true,
+            data: relatedPosts,
+            metadata: {
+                currentPost: currentPost.title,
+                currentPostTags: currentPost.tags,
+                totalFound: relatedPosts.length,
+                retrievedAt: new Date().toISOString()
+            }
+        };
+
+        logger.info(`[BLOG CONTROLLER] Found ${relatedPosts.length} related posts for ${slug}`);
+        res.json(response);
+
+    } catch (error) {
+        logger.error(`[BLOG CONTROLLER] Error in getRelatedPosts for ${req.params.slug}:`, {
+            message: error.message,
+            stack: error.stack
+        });
+
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch related posts',
+            message: error.message
+        });
+    }
+};
+
+/**
  * Get single blog post by slug
  */
 exports.getPostBySlug = async (req, res) => {

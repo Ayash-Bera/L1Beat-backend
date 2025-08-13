@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const blogController = require('../controllers/blogController');
 const { validate, validators } = require('../utils/validationMiddleware');
+const { param, query } = require("express-validator");
 
 /**
  * @route   GET /api/blog/posts
@@ -15,6 +16,29 @@ router.get('/blog/posts',
     validate(validators.getBlogPosts),
     blogController.getAllPosts
 );
+
+/**
+ * @route   GET /api/blog/posts/:slug/related
+ * @desc    Get related blog posts based on shared tags
+ * @access  Public
+ * @param   slug - Post slug identifier
+ * @query   limit - Number of related posts to return (default: 4, max: 6)
+ */
+router.get('/blog/posts/:slug/related',
+    validate([
+        param('slug')
+            .isString()
+            .isLength({ min: 1, max: 200 })
+            .matches(/^[a-zA-Z0-9-_]+$/)
+            .withMessage('Invalid slug format'),
+        query('limit')
+            .optional()
+            .isInt({ min: 1, max: 6 })
+            .withMessage('Limit must be between 1 and 6')
+    ]),
+    blogController.getRelatedPosts
+);
+
 
 /**
  * @route   GET /api/blog/posts/:slug
