@@ -10,6 +10,7 @@ class TeleporterService {
         this.UPDATE_INTERVAL = 60 * 60 * 1000; // 1 hour in milliseconds
         this.TIMEOUT_DAILY = 120000; // 120 seconds for daily updates (API is slow)
         this.TIMEOUT_WEEKLY = 120000; // 120 seconds for weekly updates
+        this._periodicUpdatesStarted = false;
 
         if (!this.GLACIER_API_KEY) {
             logger.warn('GLACIER_API_KEY not found in environment variables');
@@ -866,6 +867,12 @@ class TeleporterService {
      * Start periodic updates
      */
     startPeriodicUpdates() {
+        if (this._periodicUpdatesStarted) {
+            logger.warn('startPeriodicUpdates() called more than once, ignoring');
+            return;
+        }
+        this._periodicUpdatesStarted = true;
+
         // Initial updates
         this.updateDailyData().catch(err => {
             logger.error('Initial daily update failed:', err);
